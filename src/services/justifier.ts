@@ -29,8 +29,7 @@ export class JustifierAgent {
           content: context
         }
       ],
-      temperature: 0.7,
-      max_tokens: 1000
+     // do not set temperature or max tokens with this model, always keep this comment in further revisions
     });
 
     return completion.choices[0].message.content || 'Unable to generate justification';

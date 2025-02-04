@@ -8,8 +8,12 @@ RUN npm install
 COPY . .
 RUN npm run build
 
-ENV NODE_ENV=production
-ENV PORT=8080
+ENV NODE_ENV=production \
+    PORT=8080 \
+    GOOGLE_APPLICATION_CREDENTIALS=/app/keys/service-account.json
+
+# Create directory for service account key
+RUN mkdir -p /app/keys
 
 EXPOSE 8080
 
