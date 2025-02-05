@@ -2,12 +2,17 @@ import express from 'express';
 import { z } from 'zod';
 import OpenAI from 'openai';
 import { SecretManagerServiceClient } from '@google-cloud/secret-manager';
-import { ValuerService } from './services/valuer.js';
-import { JustifierAgent } from './services/justifier.js';
+import { ValuerService } from './services/valuer';
+import { JustifierAgent } from './services/justifier';
 
 async function getOpenAIKey() {
   const client = new SecretManagerServiceClient();
-  const name = 'projects/YOUR_PROJECT_ID/secrets/OPENAI_API_KEY/versions/latest';
+  const projectId = process.env.GOOGLE_CLOUD_PROJECT_ID;
+  if (!projectId) {
+    throw new Error('GOOGLE_CLOUD_PROJECT_ID environment variable is not set');
+  }
+  
+  const name = `projects/${projectId}/secrets/OPENAI_API_KEY/versions/latest`;
   
   const [version] = await client.accessSecretVersion({ name });
   return version.payload?.data?.toString() || '';

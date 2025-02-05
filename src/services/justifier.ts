@@ -1,5 +1,5 @@
 import OpenAI from 'openai';
-import { ValuerService } from './valuer.js';
+import { ValuerService } from './valuer';
 
 export class JustifierAgent {
   constructor(
