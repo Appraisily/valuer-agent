@@ -4,6 +4,7 @@ import { ValuerService } from './valuer.js';
 interface MarketDataResult {
   query: string;
   data: any;
+  relevance?: string;
 }
 
 export class JustifierAgent {
@@ -12,51 +13,61 @@ export class JustifierAgent {
     private valuer: ValuerService
   ) {}
 
-  private getBroaderTerms(text: string): string[] {
-    // Remove specific details to create broader search terms
-    const terms = text.toLowerCase()
-      .replace(/circa \d+/g, '') // Remove circa dates
-      .replace(/\d+s?/g, '')     // Remove years
-      .split(',')[0]             // Take first part before any comma
-      .split(' ')
-      .filter(word => 
-        word.length > 3 &&       // Skip small words
-        !['and', 'with', 'the'].includes(word)
-      );
+  private async getSearchStrategy(text: string, value: number): Promise<string[]> {
+    const prompt = `
+As an antiques expert, analyze this item and suggest 3 search queries to find comparable auction items, 
+from broad to specific. The goal is to find relevant auction results while ensuring we get enough data 
+for comparison (ideally 50-400 results per search).
 
-    // Create combinations of key terms
-    const results: string[] = [];
-    
-    // Add original search as first priority
-    results.push(text);
-    
-    // Add category + main material/style if present
-    if (terms.length >= 2) {
-      results.push(`${terms[0]} ${terms[1]}`);
-    }
-    
-    // Add just the main category
-    if (terms.length > 0) {
-      results.push(terms[0]);
-    }
+Item: "${text}" (Estimated value: $${value})
 
-    return results;
+Format your response as a JSON array of 3 strings, from broad to specific. Example:
+["furniture", "antique chair", "Victorian mahogany chair"]`;
+
+    const completion = await this.openai.chat.completions.create({
+      model: "o3-mini",
+      messages: [
+        {
+          role: "assistant",
+          content: "You are an expert in antiques and auctions. Your task is to create effective search queries that will find relevant comparable items in auction databases."
+        },
+        {
+          role: "user",
+          content: prompt
+        }
+      ]
+    });
+
+    try {
+      const queries = JSON.parse(completion.choices[0].message.content || '[]');
+      console.log('AI-generated search queries:', queries);
+      return Array.isArray(queries) ? queries : [];
+    } catch (error) {
+      console.warn('Failed to parse AI search queries:', error);
+      return [text];
+    }
   }
 
   async justify(text: string, value: number): Promise<string> {
-    const searchTerms = this.getBroaderTerms(text);
+    console.log('Justifying valuation for:', { text, value });
+    
+    const searchTerms = await this.getSearchStrategy(text, value);
     const allResults: MarketDataResult[] = [];
     
-    // Try up to 3 increasingly broader searches
-    for (const query of searchTerms.slice(0, 3)) {
+    // Execute all searches to get a comprehensive view
+    for (const query of searchTerms) {
+      console.log('Trying search term:', query);
       try {
         const result = await this.valuer.findSimilarItems(query, value);
-        allResults.push({ query, data: result });
+        const resultCount = result.data?.length || 0;
+        console.log(`Search "${query}" returned ${resultCount} results`);
         
-        // If we got some results, we can stop searching
-        if (result.data.length > 0) {
-          break;
-        }
+        allResults.push({ 
+          query, 
+          data: result,
+          relevance: resultCount > 0 && resultCount <= 400 ? 'high' : 
+                    resultCount > 400 ? 'broad' : 'limited'
+        });
       } catch (error) {
         console.warn(`Search failed for term "${query}":`, error);
         continue;
@@ -77,10 +88,10 @@ ${JSON.stringify(result.data, null, 2)}
 Based on this market data, please provide a detailed justification or challenge of the proposed value.
 Consider:
 1. How the item's value compares to similar items in the market data
-2. Any notable price patterns or trends in the comparable items
-3. Specific examples from the market data that support or challenge the valuation
-4. Any significant price outliers and their potential impact on the valuation
-5. The relevance of each search result to the original item
+2. The progression from broad to specific searches (${searchTerms.join(' → ')})
+3. Which search provided the most relevant comparables and why
+4. Any notable price patterns or trends across the different search results
+5. Specific examples that support or challenge the valuation
 
 If the market data is limited or not directly comparable, please:
 - Explain why finding exact matches might be challenging
@@ -92,7 +103,7 @@ Please provide your analysis in a clear, professional manner with specific refer
 
     // Get justification from ChatGPT
     const completion = await this.openai.chat.completions.create({
-      model: "o3-mini-high", //o3 mini high is a new model, do not change the model name
+      model: "o3-mini", //o3 mini high is a new model, do not change the model name
       messages: [
         {
           role: "assistant", //role in this model is assistant
