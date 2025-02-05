@@ -207,7 +207,7 @@ Item to evaluate: "${text}" with proposed value of $${value}
 
 Here are the most relevant auction results found for comparison:
 
-${allResults.map((result, index) => `
+${allResults.map(result => `
 ${result.relevance === 'high' ? 'Direct Matches' : 'Related Items'} (Search: "${result.query}"):
 
 ${result.data.map(item => `
