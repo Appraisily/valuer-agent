@@ -205,14 +205,14 @@ Format your response as a JSON array of strings, from most specific to most gene
     const prompt = `
 Item to evaluate: "${text}" with proposed value of $${value}
 
-Here are the most relevant auction results found for comparison:
+Here are the most relevant auction results found for comparison (all auction details are verifiable):
 
 ${allResults.map(result => `
 ${result.relevance === 'high' ? 'Direct Matches' : 'Related Items'} (Search: "${result.query}"):
 
 ${result.data.map(item => `
-• Sold at ${item.house} on ${item.date}
-  Item: ${item.title.trim()}
+• Lot Title: "${item.title.trim()}"
+  Sale: ${item.house} - ${item.date}
   Realized Price: ${item.currency} ${item.price.toLocaleString()}
   ${item.description ? `Details: ${item.description.trim()}` : ''}`).join('\n\n')}
 `).join('\n')}
@@ -220,17 +220,17 @@ ${result.data.map(item => `
 Based on this market data, please provide a detailed justification or challenge of the proposed value.
 
 In your analysis:
-1. Start with a clear summary of the most comparable auction results, citing specific sales with dates and auction houses
+1. Start with a clear summary of the most comparable auction results, citing specific lot titles, sale dates, and auction houses. Make sure to include the exact lot titles so readers can verify the sales.
 2. Compare the proposed value of ${value} ${allResults[0]?.data[0]?.currency || 'USD'} to these actual sales
 3. Note any significant condition, quality, or feature differences that might affect the value
 4. If relevant, mention any price trends visible in the data (e.g., changes over time or by region)
 5. Conclude with a clear statement supporting or challenging the proposed value based on the auction evidence
 
-Keep your response focused and concise, always referencing specific auction results to support your conclusions.`;
+Keep your response focused and concise, always referencing specific auction results with their exact lot titles and sale information to support your conclusions. This allows readers to verify the sales data independently.
 
     // Get justification from ChatGPT
     const completion = await this.openai.chat.completions.create({
-      model: "o3-mini", //o3 mini high is a new model, do not change the model name
+      model: "o3-mini-high", // o3-mini-high is a new model, do not change the model name
       messages: [
         {
           role: "assistant", //role in this model is assistant
