@@ -2,21 +2,24 @@
   "compilerOptions": {
     "target": "ES2022",
     "lib": ["ES2023"],
-    "module": "ESNext",
+    "module": "NodeNext",
     "outDir": "./dist",
     "skipLibCheck": true,
 
     /* Bundler mode */
     "moduleResolution": "node",
     "allowImportingTsExtensions": false,
-    "isolatedModules": true,
-    "moduleDetection": "force"
+    "isolatedModules": true
 
     /* Linting */
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
-    "noFallthroughCasesInSwitch": true
+    "noFallthroughCasesInSwitch": true,
+    
+    /* Additional Settings */
+    "esModuleInterop": true,
+    "resolveJsonModule": true
   },
   "include": ["src/**/*.ts"]
 }
