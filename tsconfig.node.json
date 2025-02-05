@@ -5,19 +5,13 @@
     "module": "NodeNext",
     "outDir": "./dist",
     "skipLibCheck": true,
-
-    /* Bundler mode */
-    "moduleResolution": "node",
+    "moduleResolution": "NodeNext",
     "allowImportingTsExtensions": false,
-    "isolatedModules": true
-
-    /* Linting */
+    "isolatedModules": true,
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
-    
-    /* Additional Settings */
     "esModuleInterop": true,
     "resolveJsonModule": true
   },
