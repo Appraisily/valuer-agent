@@ -205,34 +205,28 @@ Format your response as a JSON array of strings, from most specific to most gene
     const prompt = `
 Item to evaluate: "${text}" with proposed value of $${value}
 
-I performed multiple market searches to find comparable items:
+Here are the most relevant auction results found for comparison:
 
 ${allResults.map((result, index) => `
-Search ${index + 1} using term "${result.query}":
-Comparable Items:
+${result.relevance === 'high' ? 'Direct Matches' : 'Related Items'} (Search: "${result.query}"):
+
 ${result.data.map(item => `
-- ${item.title.trim()}
-  Price: ${item.currency} ${item.price}
-  Auction House: ${item.house}
-  Date: ${item.date}
-  ${item.description ? `Description: ${item.description.trim()}` : ''}`).join('\n')}
+• Sold at ${item.house} on ${item.date}
+  Item: ${item.title.trim()}
+  Realized Price: ${item.currency} ${item.price.toLocaleString()}
+  ${item.description ? `Details: ${item.description.trim()}` : ''}`).join('\n\n')}
 `).join('\n')}
 
 Based on this market data, please provide a detailed justification or challenge of the proposed value.
-Consider:
-1. How the item's value compares to similar items in the market data
-2. The relevance of each search result (${allResults.map(r => `"${r.query}": ${r.relevance}`).join(', ')})
-3. Which search provided the most relevant comparables and why
-4. Any notable price patterns or trends across the different search results
-5. Specific examples that support or challenge the valuation
 
-If the market data is limited or not directly comparable, please:
-- Explain why finding exact matches might be challenging
-- Use the broader market context from similar categories
-- Highlight what factors from the original item might justify price differences
-- Suggest what additional information would help refine the valuation
+In your analysis:
+1. Start with a clear summary of the most comparable auction results, citing specific sales with dates and auction houses
+2. Compare the proposed value of ${value} ${allResults[0]?.data[0]?.currency || 'USD'} to these actual sales
+3. Note any significant condition, quality, or feature differences that might affect the value
+4. If relevant, mention any price trends visible in the data (e.g., changes over time or by region)
+5. Conclude with a clear statement supporting or challenging the proposed value based on the auction evidence
 
-Please provide your analysis in a clear, professional manner with specific references to the market data.`;
+Keep your response focused and concise, always referencing specific auction results to support your conclusions.`;
 
     // Get justification from ChatGPT
     const completion = await this.openai.chat.completions.create({
