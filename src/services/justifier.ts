@@ -58,9 +58,18 @@ export class JustifierAgent {
       return [];
     }
 
+    interface AuctionItem {
+      lotTitle: string;
+      priceResult: number;
+      currencyCode?: string;
+      houseName?: string;
+      dateTimeLocal?: string;
+      lotDescription?: string;
+    }
+
     const items = data.hits
-      .filter(item => item && item.lotTitle && item.priceResult)
-      .map(item => ({
+      .filter((item: AuctionItem) => item && item.lotTitle && item.priceResult)
+      .map((item: AuctionItem) => ({
         title: item.lotTitle,
         price: item.priceResult,
         currency: item.currencyCode || 'USD',
