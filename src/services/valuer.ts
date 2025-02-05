@@ -1,16 +1,7 @@
-interface ValuerResponse {
-  success: boolean;
-  data: Array<{
-    title: string;
-    price: number;
-    description?: string;
-  }>;
-}
-
 export class ValuerService {
   private baseUrl = 'https://valuer-856401495068.us-central1.run.app/api/search';
 
-  async search(query: string, minPrice?: number, maxPrice?: number): Promise<ValuerResponse> {
+  async search(query: string, minPrice?: number, maxPrice?: number): Promise<any> {
     const params = new URLSearchParams({
       query,
       ...(minPrice && { 'priceResult[min]': minPrice.toString() }),
@@ -20,14 +11,23 @@ export class ValuerService {
     const response = await fetch(`${this.baseUrl}?${params}`);
 
     if (!response.ok) {
+      console.error('Valuer service error:', await response.text());
       throw new Error('Failed to fetch from Valuer service');
     }
 
-    return response.json();
+    const data = await response.json();
+    console.log('Valuer service response:', JSON.stringify(data, null, 2));
+    return data;
   }
 
-  async findSimilarItems(description: string, targetValue: number): Promise<ValuerResponse> {
-    // Search within a price range of ±30% of the target value
+  async findSimilarItems(description: string, targetValue: number): Promise<any> {
+    console.log('Searching for similar items:', {
+      description,
+      targetValue,
+      minPrice: Math.floor(targetValue * 0.7),
+      maxPrice: Math.ceil(targetValue * 1.3)
+    });
+    
     const minPrice = Math.floor(targetValue * 0.7);
     const maxPrice = Math.ceil(targetValue * 1.3);
 
