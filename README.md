@@ -1,4 +1,4 @@
-# AI Valuation Justifier Services
+# AI Valuation Justifier Service
 
 An intelligent service that provides detailed justifications for antique and collectible valuations using OpenAI's GPT model and real-time market data from auction houses.
 

@@ -36,7 +36,13 @@ export class ValuerService {
       throw new Error('Failed to fetch from Valuer service');
     }
 
-    return response.json();
+    const data = await response.json() as ValuerResponse;
+    
+    if (!data.success || !Array.isArray(data.data)) {
+      throw new Error('Invalid response format from Valuer service');
+    }
+    
+    return data;
   }
 
   /**
