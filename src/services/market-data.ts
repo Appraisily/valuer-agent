@@ -51,6 +51,7 @@ export class MarketDataService {
       try {
         const result = await this.valuer.findSimilarItems(query, baseValue);
         const simplifiedData = this.simplifyAuctionData(result);
+        const resultCount = simplifiedData.length;
         console.log('Simplified data sample (first 10 items):', 
           simplifiedData.slice(0, 10).map(item => ({
             title: item.title,

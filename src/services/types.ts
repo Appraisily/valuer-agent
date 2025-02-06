@@ -24,10 +24,3 @@ export interface ValueRangeResponse {
   mostLikelyValue: number;
   explanation: string;
 }
-
-export interface ValueRangeResponse {
-  minValue: number;
-  maxValue: number;
-  mostLikelyValue: number;
-  explanation: string;
-}

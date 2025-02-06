@@ -15,7 +15,7 @@ export class ValuerService {
       throw new Error('Failed to fetch from Valuer service');
     }
 
-    const data = await response.json();
+    const data: any = await response.json();
     console.log('Valuer service raw response (first 10 hits):', {
       total: data.total,
       firstTenHits: data.hits?.slice(0, 10).map((hit: any) => ({

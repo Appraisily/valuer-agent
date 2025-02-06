@@ -103,5 +103,3 @@ ${result.data.map((item: any) => `
   ${item.description ? `Details: ${item.description.trim()}` : ''}`).join('\n\n')}
 `).join('\n');
 }
-
-export { createValueRangeFinderPrompt };
