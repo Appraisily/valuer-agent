@@ -14,7 +14,7 @@ export interface ValuerSearchResponse {
 }
 
 export class ValuerService {
-  private baseUrl = 'https://valuer-856401495068.us-central1.run.app/api/search';
+  private baseUrl = 'https://valuer-agent-856401495068.us-central1.run.app/api/search';
 
   async search(query: string, minPrice?: number, maxPrice?: number): Promise<ValuerSearchResponse> {
     const params = new URLSearchParams({
@@ -62,7 +62,11 @@ export class ValuerService {
     return { hits };
   }
 
-  async findSimilarItems(description: string, targetValue: number): Promise<ValuerSearchResponse> {
+  async findSimilarItems(description: string, targetValue?: number): Promise<ValuerSearchResponse> {
+    if (!targetValue) {
+      return this.search(description);
+    }
+    
     console.log('Searching for similar items:', {
       description,
       targetValue,

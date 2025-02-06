@@ -45,7 +45,7 @@ export class MarketDataService {
     return result;
   }
 
-  async searchMarketData(searchTerms: string[], baseValue: number): Promise<MarketDataResult[]> {
+  async searchMarketData(searchTerms: string[], baseValue?: number): Promise<MarketDataResult[]> {
     const allResults: MarketDataResult[] = [];
     let totalItems = 0;
     console.log('\n=== Starting Market Data Search ===');
@@ -53,7 +53,7 @@ export class MarketDataService {
     for (const query of searchTerms) {
       console.log(`\nSearching for: "${query}"`);
       try {
-        const result = await this.valuer.findSimilarItems(query, baseValue);
+        const result = await this.valuer.search(query);
         const simplifiedData = this.simplifyAuctionData(result);
         
         console.log('Raw data structure:', {

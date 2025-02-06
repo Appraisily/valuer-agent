@@ -75,11 +75,11 @@ export class JustifierAgent {
       const maxValue = response.maxValue || 0;
       const mostLikelyValue = response.mostLikelyValue || 0;
       
-      if (maxValue < minValue * 3.5) {
+      if (maxValue < minValue * 4.5) { // Ensure at least 350% difference
         const midPoint = (maxValue + minValue) / 2;
         return {
-          minValue: Math.floor(midPoint / 2.5),
-          maxValue: Math.ceil(midPoint * 2.5),
+          minValue: Math.floor(midPoint / 3.25),
+          maxValue: Math.ceil(midPoint * 3.25),
           mostLikelyValue: Math.round(midPoint),
           explanation: response.explanation || 'Unable to generate explanation'
         };
@@ -124,7 +124,7 @@ export class JustifierAgent {
     console.log('Finding value for:', text);
     
     const allSearchTerms = await this.getSearchStrategy(text);
-    const allResults = await this.marketData.searchMarketData(allSearchTerms, 250);
+    const allResults = await this.marketData.searchMarketData(allSearchTerms);
 
     console.log('\n=== Final Prompt to GPT ===\nFirst 10 lines:',
       createValueFinderPrompt(text, allResults)
