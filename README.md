@@ -54,7 +54,54 @@ The server will start on port 8080 (or the port specified in your environment).
 
 ## API Usage
 
-### Justify Valuation
+The service provides three main endpoints for antique and collectible valuation:
+
+### 1. Find Value
+Calculates a specific value for an item based on market data.
+
+```http
+POST /api/find-value
+Content-Type: application/json
+
+{
+  "text": "Antique Victorian mahogany dining table, circa 1860"
+}
+```
+
+Response:
+```json
+{
+  "success": true,
+  "value": 2500,
+  "explanation": "Detailed analysis based on comparable auction results..."
+}
+```
+
+### 2. Find Value Range
+Provides a broad value range accounting for variations in condition and market factors.
+
+```http
+POST /api/find-value-range
+Content-Type: application/json
+
+{
+  "text": "Antique Victorian mahogany dining table, circa 1860"
+}
+```
+
+Response:
+```json
+{
+  "success": true,
+  "minValue": 1500,
+  "maxValue": 5000,
+  "mostLikelyValue": 2500,
+  "explanation": "Detailed analysis of value range factors..."
+}
+```
+
+### 3. Justify Value
+Analyzes whether a proposed value is reasonable based on market data.
 
 ```http
 POST /api/justify
@@ -70,9 +117,15 @@ Response:
 ```json
 {
   "success": true,
-  "justification": "Detailed analysis of the item's value..."
+  "justification": "Detailed analysis comparing the proposed value to market data..."
 }
 ```
+
+All endpoints:
+- Use real-time auction data for comparisons
+- Provide detailed explanations citing specific comparable sales
+- Handle errors gracefully with appropriate status codes
+- Validate input using Zod schema
 
 ## Testing
 

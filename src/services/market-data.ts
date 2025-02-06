@@ -8,6 +8,7 @@ export class MarketDataService {
   private simplifyAuctionData(data: any): SimplifiedAuctionItem[] {
     if (!Array.isArray(data?.hits)) {
       console.log('No valid hits array in response data');
+      console.log('Raw response structure:', JSON.stringify(data, null, 2));
       return [];
     }
 
@@ -18,7 +19,7 @@ export class MarketDataService {
         price: item.priceResult,
         currency: item.currencyCode || 'USD',
         house: item.houseName || 'Unknown',
-        date: item.dateTimeLocal?.split(' ')[0] || 'Unknown',
+        date: item.dateTimeLocal?.split('T')[0] || 'Unknown',
         description: item.lotDescription || ''
       }));
 

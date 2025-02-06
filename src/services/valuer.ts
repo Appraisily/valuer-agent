@@ -16,7 +16,7 @@ export class ValuerService {
     }
 
     const data: any = await response.json();
-    const hits = Array.isArray(data?.hits) ? data.hits : [];
+    const hits = Array.isArray(data?.results?.[0]?.hits) ? data.results[0].hits : [];
     console.log('Valuer service raw response (first 10 hits):', {
       total: hits.length,
       firstTenHits: hits.slice(0, 10).map((hit: any) => ({
@@ -30,7 +30,7 @@ export class ValuerService {
       console.log('No results found for query:', query);
     }
     
-    return data;
+    return { hits }; // Return normalized structure with hits array
   }
 
   async findSimilarItems(description: string, targetValue: number): Promise<any> {
