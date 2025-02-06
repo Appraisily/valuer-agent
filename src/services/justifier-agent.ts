@@ -45,7 +45,7 @@ export class JustifierAgent {
     const allResults = await this.marketData.searchMarketData(allSearchTerms, value);
 
     const completion = await this.openai.chat.completions.create({
-      model: "o3-mini-high",
+      model: "o3-mini",
       messages: [
         {
           role: "assistant",
