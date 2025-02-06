@@ -17,3 +17,10 @@ export interface ValueResponse {
   value: number;
   explanation: string;
 }
+
+export interface ValueRangeResponse {
+  minValue: number;
+  maxValue: number;
+  mostLikelyValue: number;
+  explanation: string;
+}

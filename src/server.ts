@@ -82,6 +82,31 @@ app.post('/api/find-value', async (req, res) => {
   }
 });
 
+app.post('/api/find-value-range', async (req, res) => {
+  try {
+    if (!openai || !justifier) {
+      throw new Error('OpenAI client not initialized');
+    }
+
+    const { text } = FindValueRequestSchema.parse(req.body);
+    const result = await justifier.findValueRange(text);
+    
+    res.json({ 
+      success: true, 
+      minValue: result.minValue,
+      maxValue: result.maxValue,
+      mostLikelyValue: result.mostLikelyValue,
+      explanation: result.explanation
+    });
+  } catch (error) {
+    console.error('Error:', error);
+    res.status(400).json({ 
+      success: false, 
+      error: error instanceof Error ? error.message : 'Unknown error' 
+    });
+  }
+});
+
 const port = process.env.PORT || 8080;
 
 // Initialize OpenAI before starting server
