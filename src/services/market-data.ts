@@ -1,4 +1,4 @@
-import type { SimplifiedAuctionItem, MarketDataResult } from './types';
+import { SimplifiedAuctionItem, MarketDataResult } from './types';
 import { ValuerService } from './valuer';
 import { estimateTokens, trimDescription, MAX_AVAILABLE_TOKENS } from './utils/tokenizer';
 

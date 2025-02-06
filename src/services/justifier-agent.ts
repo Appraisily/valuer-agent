@@ -1,14 +1,14 @@
 import OpenAI from 'openai';
 import { ValuerService } from './valuer';
 import { MarketDataService } from './market-data';
-import type { ValueResponse, ValueRangeResponse } from './types';
+import { ValueResponse, ValueRangeResponse } from './types';
 import { createSearchStrategyPrompt, createJustificationPrompt, createValueFinderPrompt, createValueRangeFinderPrompt } from './prompts';
 
 export class JustifierAgent {
   private marketData: MarketDataService;
 
-  constructor(private openai: OpenAI, private valuerService: ValuerService) {
-    this.marketData = new MarketDataService(valuerService);
+  constructor(private openai: OpenAI, valuer: ValuerService) {
+    this.marketData = new MarketDataService(valuer);
   }
 
   private async getSearchStrategy(text: string, value?: number): Promise<string[]> {
