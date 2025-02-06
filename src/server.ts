@@ -3,7 +3,7 @@ import { z } from 'zod';
 import OpenAI from 'openai';
 import { SecretManagerServiceClient } from '@google-cloud/secret-manager';
 import { ValuerService } from './services/valuer.js';
-import { JustifierAgent } from './services/justifier.js';
+import { JustifierAgent } from './services/justifier-agent.js';
 
 async function getOpenAIKey() {
   const client = new SecretManagerServiceClient();
