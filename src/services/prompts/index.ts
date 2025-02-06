@@ -38,21 +38,27 @@ export function createValueFinderPrompt(text: string, allResults: any[]): string
   return `
 Item to evaluate: "${text}"
 
-Here are the most relevant auction results found for comparison (all auction details are verifiable):
+Here are the actual auction results found for comparison:
 
 ${formatAuctionResults(allResults)}
 
 Based on this market data, please:
 1. Calculate a precise market value for the item, rounded to the nearest $50
-2. Select exactly 5 of the most relevant comparable sales that support this valuation
+2. ONLY use the auction results provided above - DO NOT invent or fabricate any sales data
+3. For each comparable sale you reference, you MUST include:
+   - The exact lot title as shown in the data
+   - The specific auction house name
+   - The exact sale date
+   - The realized price with currency
+   - Any relevant condition or detail notes from the lot description
 3. Format your response as follows:
 
 {
   "calculatedValue": [your calculated value as a number],
-  "explanation": [A detailed explanation including the 5 most relevant comparables with their exact lot titles, dates, and prices]
+  "explanation": [A detailed explanation citing ONLY actual auction results with complete sale details]
 }
 
-Your explanation should clearly show how you arrived at the specific value based on the comparable sales.`;
+CRITICAL: If there are insufficient actual comparable sales in the provided data, acknowledge this limitation in your explanation and adjust your confidence level accordingly. Never invent or assume sales data that isn't present in the results above.`;
 }
 
 export function createValueRangeFinderPrompt(text: string, allResults: any[]): string {
