@@ -7,10 +7,7 @@ import { createSearchStrategyPrompt, createJustificationPrompt, createValueFinde
 export class JustifierAgent {
   private marketData: MarketDataService;
 
-  constructor(
-    private openai: OpenAI,
-    private valuer: ValuerService
-  ) {
+  constructor(private openai: OpenAI, valuer: ValuerService) {
     this.marketData = new MarketDataService(valuer);
   }
 
