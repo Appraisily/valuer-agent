@@ -1,0 +1,68 @@
+export function createSearchStrategyPrompt(text: string, value: number): string {
+  return `
+As an antiques expert, analyze this item and suggest search queries in order of specificity, from most specific to most general.
+Start with the most precise description that would match this exact item, then progressively broaden the terms.
+The goal is to find the most relevant matches first, then fall back to broader categories if needed.
+
+Item: "${text}" (Estimated value: $${value})
+
+Format your response as a JSON array of strings, from most specific to most general. Example:
+["Victorian mahogany balloon back dining chair circa 1860",
+ "Victorian mahogany dining chair",
+ "antique mahogany chair",
+ "antique dining chair",
+ "antique furniture"]`;
+}
+
+export function createJustificationPrompt(text: string, value: number, allResults: any[]): string {
+  return `
+Item to evaluate: "${text}" with proposed value of $${value}
+
+Here are the most relevant auction results found for comparison (all auction details are verifiable):
+
+${formatAuctionResults(allResults)}
+
+Based on this market data, please provide a detailed justification or challenge of the proposed value.
+
+In your analysis:
+1. Start with a clear summary of the most comparable auction results, citing specific lot titles, sale dates, and auction houses. Make sure to include the exact lot titles so readers can verify the sales.
+2. Compare the proposed value of ${value} ${allResults[0]?.data[0]?.currency || 'USD'} to these actual sales
+3. Note any significant condition, quality, or feature differences that might affect the value
+4. If relevant, mention any price trends visible in the data (e.g., changes over time or by region)
+5. Conclude with a clear statement supporting or challenging the proposed value based on the auction evidence
+
+Keep your response focused and concise, always referencing specific auction results with their exact lot titles and sale information to support your conclusions. This allows readers to verify the sales data independently.`;
+}
+
+export function createValueFinderPrompt(text: string, allResults: any[]): string {
+  return `
+Item to evaluate: "${text}"
+
+Here are the most relevant auction results found for comparison (all auction details are verifiable):
+
+${formatAuctionResults(allResults)}
+
+Based on this market data, please:
+1. Calculate a precise market value for the item, rounded to the nearest $50
+2. Select exactly 5 of the most relevant comparable sales that support this valuation
+3. Format your response as follows:
+
+{
+  "calculatedValue": [your calculated value as a number],
+  "explanation": [A detailed explanation including the 5 most relevant comparables with their exact lot titles, dates, and prices]
+}
+
+Your explanation should clearly show how you arrived at the specific value based on the comparable sales.`;
+}
+
+function formatAuctionResults(results: any[]): string {
+  return results.map(result => `
+${result.relevance === 'high' ? 'Direct Matches' : 'Related Items'} (Search: "${result.query}"):
+
+${result.data.map((item: any) => `
+• Lot Title: "${item.title.trim()}"
+  Sale: ${item.house} - ${item.date}
+  Realized Price: ${item.currency} ${item.price.toLocaleString()}
+  ${item.description ? `Details: ${item.description.trim()}` : ''}`).join('\n\n')}
+`).join('\n');
+}

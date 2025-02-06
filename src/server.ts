@@ -37,6 +37,10 @@ const RequestSchema = z.object({
   value: z.number(),
 });
 
+const FindValueRequestSchema = z.object({
+  text: z.string(),
+});
+
 app.post('/api/justify', async (req, res) => {
   try {
     if (!openai || !justifier) {
@@ -46,6 +50,29 @@ app.post('/api/justify', async (req, res) => {
     const { text, value } = RequestSchema.parse(req.body);
     const justification = await justifier.justify(text, value);
     res.json({ success: true, justification });
+  } catch (error) {
+    console.error('Error:', error);
+    res.status(400).json({ 
+      success: false, 
+      error: error instanceof Error ? error.message : 'Unknown error' 
+    });
+  }
+});
+
+app.post('/api/find-value', async (req, res) => {
+  try {
+    if (!openai || !justifier) {
+      throw new Error('OpenAI client not initialized');
+    }
+
+    const { text } = FindValueRequestSchema.parse(req.body);
+    const result = await justifier.findValue(text);
+    
+    res.json({ 
+      success: true, 
+      value: result.value,
+      explanation: result.explanation
+    });
   } catch (error) {
     console.error('Error:', error);
     res.status(400).json({ 
