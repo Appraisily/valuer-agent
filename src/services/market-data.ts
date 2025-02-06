@@ -44,14 +44,20 @@ export class MarketDataService {
   async searchMarketData(searchTerms: string[], baseValue: number): Promise<MarketDataResult[]> {
     const allResults: MarketDataResult[] = [];
     let totalItems = 0;
+    console.log('\n=== Starting Market Data Search ===');
     
     for (const query of searchTerms) {
-      console.log('Trying search term:', query);
+      console.log(`\nSearching for: "${query}"`);
       try {
         const result = await this.valuer.findSimilarItems(query, baseValue);
         const simplifiedData = this.simplifyAuctionData(result);
-        const resultCount = simplifiedData.length;
-        console.log(`Search "${query}" returned ${resultCount} results`);
+        console.log('Simplified data sample (first 10 items):', 
+          simplifiedData.slice(0, 10).map(item => ({
+            title: item.title,
+            price: item.price,
+            house: item.house
+          }))
+        );
         
         if (resultCount > 0) {
           totalItems += resultCount;

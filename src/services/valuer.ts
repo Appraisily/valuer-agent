@@ -16,7 +16,14 @@ export class ValuerService {
     }
 
     const data = await response.json();
-    console.log('Valuer service response:', JSON.stringify(data, null, 2));
+    console.log('Valuer service raw response (first 10 hits):', {
+      total: data.total,
+      firstTenHits: data.hits?.slice(0, 10).map((hit: any) => ({
+        lotTitle: hit.lotTitle,
+        priceResult: hit.priceResult,
+        houseName: hit.houseName
+      }))
+    });
     return data;
   }
 

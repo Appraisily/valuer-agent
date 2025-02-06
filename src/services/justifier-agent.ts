@@ -1,7 +1,7 @@
 import OpenAI from 'openai';
 import { ValuerService } from './valuer.js';
 import { MarketDataService } from './market-data.js';
-import { ValueResponse } from './types.js';
+import { ValueResponse, ValueRangeResponse } from './types.js';
 import { createSearchStrategyPrompt, createJustificationPrompt, createValueFinderPrompt } from './prompts/index.js';
 
 export class JustifierAgent {
@@ -30,7 +30,9 @@ export class JustifierAgent {
 
     try {
       const queries = JSON.parse(completion.choices[0].message.content || '[]');
-      console.log('AI-generated search queries:', queries);
+      console.log('\n=== AI Search Strategy ===\nGenerated queries:', 
+        queries.slice(0, 10).map((q: string, i: number) => `${i + 1}. ${q}`).join('\n')
+      );
       return Array.isArray(queries) ? queries : [];
     } catch (error) {
       console.warn('Failed to parse AI search queries:', error);
@@ -115,6 +117,13 @@ export class JustifierAgent {
     
     const allSearchTerms = await this.getSearchStrategy(text);
     const allResults = await this.marketData.searchMarketData(allSearchTerms, 250);
+
+    console.log('\n=== Final Prompt to GPT ===\nFirst 10 lines:',
+      createValueFinderPrompt(text, allResults)
+        .split('\n')
+        .slice(0, 10)
+        .join('\n')
+    );
 
     const completion = await this.openai.chat.completions.create({
       model: "o3-mini",
