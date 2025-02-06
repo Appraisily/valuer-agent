@@ -1,9 +1,22 @@
 import type { ValuerResponse, ValuerLot } from './types';
 
+export interface ValuerSearchResponse {
+  hits: Array<{
+    lotTitle: string;
+    priceResult: number;
+    currencyCode: string;
+    currencySymbol: string;
+    houseName: string;
+    dateTimeLocal: string;
+    lotNumber: string;
+    saleType: string;
+  }>;
+}
+
 export class ValuerService {
   private baseUrl = 'https://valuer-856401495068.us-central1.run.app/api/search';
 
-  async search(query: string, minPrice?: number, maxPrice?: number): Promise<any> {
+  async search(query: string, minPrice?: number, maxPrice?: number): Promise<ValuerSearchResponse> {
     const params = new URLSearchParams({
       query,
       ...(minPrice && { 'priceResult[min]': minPrice.toString() }),
@@ -17,8 +30,8 @@ export class ValuerService {
       throw new Error('Failed to fetch from Valuer service');
     }
 
-    const data: ValuerResponse = await response.json();
-    const lots: ValuerLot[] = Array.isArray(data?.data?.lots) ? data.data.lots : [];
+    const data = await response.json() as ValuerResponse;
+    const lots = Array.isArray(data?.data?.lots) ? data.data.lots : [];
     
     // Transform lots into the expected hits format
     const hits = lots.map((lot: ValuerLot) => ({
@@ -34,7 +47,7 @@ export class ValuerService {
     
     console.log('Valuer service raw response (first 10 hits):', {
       total: hits.length,
-      firstTenHits: hits.slice(0, 10).map((hit: any) => ({
+      firstTenHits: hits.slice(0, 10).map(hit => ({
         lotTitle: hit.lotTitle,
         priceResult: hit.priceResult,
         houseName: hit.houseName
@@ -46,10 +59,10 @@ export class ValuerService {
       console.log('Raw response:', JSON.stringify(data, null, 2));
     }
     
-    return { hits }; // Return normalized structure with hits array
+    return { hits };
   }
 
-  async findSimilarItems(description: string, targetValue: number): Promise<any> {
+  async findSimilarItems(description: string, targetValue: number): Promise<ValuerSearchResponse> {
     console.log('Searching for similar items:', {
       description,
       targetValue,

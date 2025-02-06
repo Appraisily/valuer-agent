@@ -1,14 +1,14 @@
 import OpenAI from 'openai';
-import type { ValuerService } from './valuer';
-import type { MarketDataService } from './market-data';
+import { ValuerService } from './valuer';
+import { MarketDataService } from './market-data';
 import type { ValueResponse, ValueRangeResponse } from './types';
 import { createSearchStrategyPrompt, createJustificationPrompt, createValueFinderPrompt, createValueRangeFinderPrompt } from './prompts';
 
 export class JustifierAgent {
   private marketData: MarketDataService;
 
-  constructor(private openai: OpenAI, valuer: ValuerService) {
-    this.marketData = new MarketDataService(valuer);
+  constructor(private openai: OpenAI, private valuerService: ValuerService) {
+    this.marketData = new MarketDataService(valuerService);
   }
 
   private async getSearchStrategy(text: string, value?: number): Promise<string[]> {
@@ -29,11 +29,14 @@ export class JustifierAgent {
     });
 
     try {
-      const queries = JSON.parse(completion.choices[0].message.content || '[]');
+      const content = completion.choices[0]?.message?.content;
+      if (!content) return [text];
+      
+      const queries = JSON.parse(content);
       console.log('\n=== AI Search Strategy ===\nGenerated queries:', 
         queries.slice(0, 10).map((q: string, i: number) => `${i + 1}. ${q}`).join('\n')
       );
-      return Array.isArray(queries) ? queries : [];
+      return Array.isArray(queries) ? queries : [text];
     } catch (error) {
       console.warn('Failed to parse AI search queries:', error);
       return [text];
@@ -44,7 +47,7 @@ export class JustifierAgent {
     console.log('Finding value range for:', text);
     
     const allSearchTerms = await this.getSearchStrategy(text);
-    const allResults = await this.marketData.searchMarketData(allSearchTerms, 1000); // Using a higher base value for broader search
+    const allResults = await this.marketData.searchMarketData(allSearchTerms, 1000);
 
     const completion = await this.openai.chat.completions.create({
       model: "o3-mini",
@@ -61,14 +64,18 @@ export class JustifierAgent {
     });
 
     try {
-      const response = JSON.parse(completion.choices[0].message.content || '{}');
+      const content = completion.choices[0]?.message?.content;
+      if (!content) {
+        throw new Error('No response from OpenAI');
+      }
       
-      // Validate that the range has at least 250% difference
+      const response = JSON.parse(content);
+      
       const minValue = response.minValue || 0;
       const maxValue = response.maxValue || 0;
       const mostLikelyValue = response.mostLikelyValue || 0;
       
-      if (maxValue < minValue * 3.5) { // Ensuring at least 250% difference
+      if (maxValue < minValue * 3.5) {
         const midPoint = (maxValue + minValue) / 2;
         return {
           minValue: Math.floor(midPoint / 2.5),
@@ -89,6 +96,7 @@ export class JustifierAgent {
       throw new Error('Failed to calculate value range');
     }
   }
+
   async justify(text: string, value: number): Promise<string> {
     console.log('Justifying valuation for:', { text, value });
     
@@ -109,7 +117,7 @@ export class JustifierAgent {
       ]
     });
 
-    return completion.choices[0].message.content || 'Unable to generate justification';
+    return completion.choices[0]?.message?.content || 'Unable to generate justification';
   }
 
   async findValue(text: string): Promise<ValueResponse> {
@@ -140,7 +148,12 @@ export class JustifierAgent {
     });
 
     try {
-      const response = JSON.parse(completion.choices[0].message.content || '{}');
+      const content = completion.choices[0]?.message?.content;
+      if (!content) {
+        throw new Error('No response from OpenAI');
+      }
+      
+      const response = JSON.parse(content);
       return {
         value: response.calculatedValue || 0,
         explanation: response.explanation || 'Unable to generate explanation'

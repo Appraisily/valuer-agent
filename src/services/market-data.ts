@@ -1,11 +1,11 @@
 import type { SimplifiedAuctionItem, MarketDataResult } from './types';
-import type { ValuerService } from './valuer';
+import { ValuerService } from './valuer';
 import { estimateTokens, trimDescription, MAX_AVAILABLE_TOKENS } from './utils/tokenizer';
 
 export class MarketDataService {
   constructor(private valuer: ValuerService) {}
 
-  private simplifyAuctionData(data: any): SimplifiedAuctionItem[] {
+  private simplifyAuctionData(data: { hits?: any[] }): SimplifiedAuctionItem[] {
     if (!Array.isArray(data?.hits)) {
       console.log('No valid hits array in response data');
       console.log('Raw response structure:', JSON.stringify(data, null, 2));
@@ -13,8 +13,9 @@ export class MarketDataService {
     }
 
     const items = data.hits
-      .filter((item: any) => item && item.lotTitle && item.priceResult)
-      .map((item: any) => ({
+      .filter((item): item is NonNullable<typeof item> => 
+        Boolean(item && item.lotTitle && item.priceResult))
+      .map((item) => ({
         title: item.lotTitle,
         price: item.priceResult,
         currency: item.currencyCode || 'USD',
@@ -28,13 +29,14 @@ export class MarketDataService {
     const maxTokensPerItem = Math.floor(MAX_AVAILABLE_TOKENS / Math.min(items.length, 15));
 
     for (const item of items) {
-      item.description = trimDescription(item.description, maxTokensPerItem / 2);
+      const description = trimDescription(item.description, maxTokensPerItem / 2);
+      const newItem = { ...item, description };
       
-      const itemTokens = estimateTokens(JSON.stringify(item) + '\n');
+      const itemTokens = estimateTokens(JSON.stringify(newItem) + '\n');
       
       if (totalTokens + itemTokens > MAX_AVAILABLE_TOKENS) break;
       
-      result.push(item);
+      result.push(newItem);
       totalTokens += itemTokens;
       
       if (result.length >= 15) break;
@@ -54,7 +56,6 @@ export class MarketDataService {
         const result = await this.valuer.findSimilarItems(query, baseValue);
         const simplifiedData = this.simplifyAuctionData(result);
         
-        // Log the raw data structure before simplification
         console.log('Raw data structure:', {
           hasHits: Array.isArray(result?.hits),
           totalHits: result?.hits?.length || 0,
