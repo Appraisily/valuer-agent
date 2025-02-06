@@ -1,6 +1,6 @@
-import { SimplifiedAuctionItem, MarketDataResult } from './types';
-import { ValuerService } from './valuer';
-import { estimateTokens, trimDescription, MAX_AVAILABLE_TOKENS } from './utils/tokenizer';
+import { SimplifiedAuctionItem, MarketDataResult } from './types.js';
+import { ValuerService } from './valuer.js';
+import { estimateTokens, trimDescription, MAX_AVAILABLE_TOKENS } from './utils/tokenizer.js';
 
 export class MarketDataService {
   constructor(private valuer: ValuerService) {}

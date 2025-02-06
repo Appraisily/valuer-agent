@@ -1,4 +1,4 @@
-import { ValuerResponse, ValuerLot } from './types';
+import { ValuerResponse, ValuerLot } from './types.js';
 
 export interface ValuerSearchResponse {
   hits: Array<{

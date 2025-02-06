@@ -1,23 +1,32 @@
 import { describe, it, expect, vi } from 'vitest';
-import { JustifierAgent } from '../services/justifier-agent';
-import { ValuerService } from '../services/valuer';
+import { JustifierAgent } from '../services/justifier-agent.js';
+import { ValuerService } from '../services/valuer.js';
 import OpenAI from 'openai';
 
+// Mock types for OpenAI
+type MockOpenAI = {
+  chat: {
+    completions: {
+      create: ReturnType<typeof vi.fn>;
+    };
+  };
+};
+
 describe('JustifierAgent', () => {
-  const mockOpenAI = {
+  const mockOpenAI: MockOpenAI = {
     chat: {
       completions: {
         create: vi.fn()
       }
     }
-  } as unknown as OpenAI;
+  };
 
   const mockValuerService = {
     findSimilarItems: vi.fn(),
     search: vi.fn()
   } as unknown as ValuerService;
 
-  const agent = new JustifierAgent(mockOpenAI, mockValuerService);
+  const agent = new JustifierAgent(mockOpenAI as unknown as OpenAI, mockValuerService);
 
   describe('findValue', () => {
     it('should return a value and explanation', async () => {
@@ -32,7 +41,7 @@ describe('JustifierAgent', () => {
         }]
       };
 
-      mockOpenAI.chat.completions.create.mockResolvedValue(mockCompletion);
+      vi.mocked(mockOpenAI.chat.completions.create).mockResolvedValue(mockCompletion as any);
       mockValuerService.findSimilarItems.mockResolvedValue({ hits: [] });
 
       const result = await agent.findValue('test item');
@@ -59,7 +68,7 @@ describe('JustifierAgent', () => {
         }]
       };
 
-      mockOpenAI.chat.completions.create.mockResolvedValue(mockCompletion);
+      vi.mocked(mockOpenAI.chat.completions.create).mockResolvedValue(mockCompletion as any);
       mockValuerService.findSimilarItems.mockResolvedValue({ hits: [] });
 
       const result = await agent.findValueRange('test item');
@@ -83,7 +92,7 @@ describe('JustifierAgent', () => {
         }]
       };
 
-      mockOpenAI.chat.completions.create.mockResolvedValue(mockCompletion);
+      vi.mocked(mockOpenAI.chat.completions.create).mockResolvedValue(mockCompletion as any);
       mockValuerService.findSimilarItems.mockResolvedValue({ hits: [] });
 
       const result = await agent.justify('test item', 1000);

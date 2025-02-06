@@ -1,8 +1,8 @@
 import OpenAI from 'openai';
-import { ValuerService } from './valuer';
-import { MarketDataService } from './market-data';
-import { ValueResponse, ValueRangeResponse } from './types';
-import { createSearchStrategyPrompt, createJustificationPrompt, createValueFinderPrompt, createValueRangeFinderPrompt } from './prompts';
+import { ValuerService } from './valuer.js';
+import { MarketDataService } from './market-data.js';
+import { ValueResponse, ValueRangeResponse } from './types.js';
+import { createSearchStrategyPrompt, createJustificationPrompt, createValueFinderPrompt, createValueRangeFinderPrompt } from './prompts/index.js';
 
 export class JustifierAgent {
   private marketData: MarketDataService;
