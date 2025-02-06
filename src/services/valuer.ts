@@ -16,14 +16,20 @@ export class ValuerService {
     }
 
     const data: any = await response.json();
+    const hits = Array.isArray(data?.hits) ? data.hits : [];
     console.log('Valuer service raw response (first 10 hits):', {
-      total: data.total,
-      firstTenHits: data.hits?.slice(0, 10).map((hit: any) => ({
+      total: hits.length,
+      firstTenHits: hits.slice(0, 10).map((hit: any) => ({
         lotTitle: hit.lotTitle,
         priceResult: hit.priceResult,
         houseName: hit.houseName
       }))
     });
+    
+    if (hits.length === 0) {
+      console.log('No results found for query:', query);
+    }
+    
     return data;
   }
 

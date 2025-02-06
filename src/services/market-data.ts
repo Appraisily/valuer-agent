@@ -7,6 +7,7 @@ export class MarketDataService {
 
   private simplifyAuctionData(data: any): SimplifiedAuctionItem[] {
     if (!Array.isArray(data?.hits)) {
+      console.log('No valid hits array in response data');
       return [];
     }
 
@@ -51,6 +52,17 @@ export class MarketDataService {
       try {
         const result = await this.valuer.findSimilarItems(query, baseValue);
         const simplifiedData = this.simplifyAuctionData(result);
+        
+        // Log the raw data structure before simplification
+        console.log('Raw data structure:', {
+          hasHits: Array.isArray(result?.hits),
+          totalHits: result?.hits?.length || 0,
+          sampleHit: result?.hits?.[0] ? {
+            lotTitle: result.hits[0].lotTitle,
+            priceResult: result.hits[0].priceResult
+          } : 'No hits'
+        });
+        
         const resultCount = simplifiedData.length;
         console.log('Simplified data sample (first 10 items):', 
           simplifiedData.slice(0, 10).map(item => ({
