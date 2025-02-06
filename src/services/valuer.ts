@@ -16,7 +16,20 @@ export class ValuerService {
     }
 
     const data: any = await response.json();
-    const hits = Array.isArray(data?.results?.[0]?.hits) ? data.results[0].hits : [];
+    const lots = Array.isArray(data?.data?.lots) ? data.data.lots : [];
+    
+    // Transform lots into the expected hits format
+    const hits = lots.map(lot => ({
+      lotTitle: lot.title,
+      priceResult: lot.price.amount,
+      currencyCode: lot.price.currency,
+      currencySymbol: lot.price.symbol,
+      houseName: lot.auctionHouse,
+      dateTimeLocal: lot.date,
+      lotNumber: lot.lotNumber,
+      saleType: lot.saleType
+    }));
+    
     console.log('Valuer service raw response (first 10 hits):', {
       total: hits.length,
       firstTenHits: hits.slice(0, 10).map((hit: any) => ({
@@ -28,6 +41,7 @@ export class ValuerService {
     
     if (hits.length === 0) {
       console.log('No results found for query:', query);
+      console.log('Raw response:', JSON.stringify(data, null, 2));
     }
     
     return { hits }; // Return normalized structure with hits array
