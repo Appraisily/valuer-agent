@@ -1,3 +1,5 @@
+import type { ValuerResponse, ValuerLot } from './types';
+
 export class ValuerService {
   private baseUrl = 'https://valuer-856401495068.us-central1.run.app/api/search';
 
@@ -16,7 +18,7 @@ export class ValuerService {
     }
 
     const data: ValuerResponse = await response.json();
-    const lots = Array.isArray(data?.data?.lots) ? data.data.lots : [];
+    const lots: ValuerLot[] = Array.isArray(data?.data?.lots) ? data.data.lots : [];
     
     // Transform lots into the expected hits format
     const hits = lots.map((lot: ValuerLot) => ({
