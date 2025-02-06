@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { JustifierAgent } from '../services/justifier-agent.js';
 import { ValuerService } from '../services/valuer.js';
 import OpenAI from 'openai';
+import type { ValuerSearchResponse } from '../services/valuer.js';
 
 // Mock types for OpenAI
 type MockOpenAI = {
@@ -21,9 +22,13 @@ describe('JustifierAgent', () => {
     }
   };
 
+  // Create properly typed mock functions
+  const mockFindSimilarItems = vi.fn<[string, number], Promise<ValuerSearchResponse>>();
+  const mockSearch = vi.fn<[string, number | undefined, number | undefined], Promise<ValuerSearchResponse>>();
+
   const mockValuerService = {
-    findSimilarItems: vi.fn(),
-    search: vi.fn()
+    findSimilarItems: mockFindSimilarItems,
+    search: mockSearch
   } as unknown as ValuerService;
 
   const agent = new JustifierAgent(mockOpenAI as unknown as OpenAI, mockValuerService);
@@ -42,7 +47,7 @@ describe('JustifierAgent', () => {
       };
 
       vi.mocked(mockOpenAI.chat.completions.create).mockResolvedValue(mockCompletion as any);
-      mockValuerService.findSimilarItems.mockResolvedValue({ hits: [] });
+      mockFindSimilarItems.mockResolvedValue({ hits: [] });
 
       const result = await agent.findValue('test item');
 
@@ -69,7 +74,7 @@ describe('JustifierAgent', () => {
       };
 
       vi.mocked(mockOpenAI.chat.completions.create).mockResolvedValue(mockCompletion as any);
-      mockValuerService.findSimilarItems.mockResolvedValue({ hits: [] });
+      mockFindSimilarItems.mockResolvedValue({ hits: [] });
 
       const result = await agent.findValueRange('test item');
 
@@ -93,7 +98,7 @@ describe('JustifierAgent', () => {
       };
 
       vi.mocked(mockOpenAI.chat.completions.create).mockResolvedValue(mockCompletion as any);
-      mockValuerService.findSimilarItems.mockResolvedValue({ hits: [] });
+      mockFindSimilarItems.mockResolvedValue({ hits: [] });
 
       const result = await agent.justify('test item', 1000);
 
