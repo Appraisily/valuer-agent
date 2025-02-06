@@ -18,6 +18,34 @@ export interface ValueResponse {
   explanation: string;
 }
 
+export interface ValuerLot {
+  title: string;
+  price: {
+    amount: number;
+    currency: string;
+    symbol: string;
+  };
+  auctionHouse: string;
+  date: string;
+  lotNumber: string;
+  saleType: string;
+}
+
+export interface ValuerResponse {
+  success: boolean;
+  timestamp: string;
+  parameters: {
+    query: string;
+    priceResult?: {
+      min: string;
+      max: string;
+    };
+  };
+  data: {
+    lots: ValuerLot[];
+    totalResults: number;
+  };
+}
 export interface ValueRangeResponse {
   minValue: number;
   maxValue: number;

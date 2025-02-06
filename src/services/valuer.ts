@@ -15,11 +15,11 @@ export class ValuerService {
       throw new Error('Failed to fetch from Valuer service');
     }
 
-    const data: any = await response.json();
+    const data: ValuerResponse = await response.json();
     const lots = Array.isArray(data?.data?.lots) ? data.data.lots : [];
     
     // Transform lots into the expected hits format
-    const hits = lots.map(lot => ({
+    const hits = lots.map((lot: ValuerLot) => ({
       lotTitle: lot.title,
       priceResult: lot.price.amount,
       currencyCode: lot.price.currency,
