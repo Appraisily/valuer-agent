@@ -51,4 +51,5 @@ export interface ValueRangeResponse {
   maxValue: number;
   mostLikelyValue: number;
   explanation: string;
+  auctionResults: SimplifiedAuctionItem[];
 }

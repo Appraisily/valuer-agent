@@ -47,15 +47,16 @@ export class MarketDataService {
 
   async searchMarketData(searchTerms: string[], baseValue?: number): Promise<MarketDataResult[]> {
     const allResults: MarketDataResult[] = [];
-    console.log('\n=== Starting Market Data Search ===');
+    console.log('\n=== Starting Market Data Search ===\n');
+    console.log('Search terms:', JSON.stringify(searchTerms, null, 2));
     
     for (const query of searchTerms) {
-      console.log(`\nSearching for: "${query}"`);
+      console.log(`\n=== Searching Term: "${query}" ===`);
       try {
         const result = await this.valuer.search(query);
         const simplifiedData = this.simplifyAuctionData(result);
         
-        console.log('Raw data structure:', {
+        console.log('\nRaw data structure:', {
           hasHits: Array.isArray(result?.hits),
           totalHits: result?.hits?.length || 0,
           sampleHit: result?.hits?.[0] ? {
@@ -73,6 +74,8 @@ export class MarketDataService {
           }))
         );
         
+        console.log(`\nProcessed ${resultCount} items for query "${query}"`);
+        
         if (resultCount > 0) {
           allResults.push({ 
             query, 
@@ -81,13 +84,15 @@ export class MarketDataService {
           });
           
           if (allResults.length >= 3 && allResults.some(r => r.relevance === 'high')) {
-            console.log('Found sufficient relevant items, stopping search');
+            console.log('\n=== Search Complete ===');
+            console.log('Found sufficient relevant items (3+ results with high relevance)');
             break;
           }
         }
 
         if (query.split(' ').length <= 2 && resultCount === 0) {
-          console.log('Even broad search returned no results, stopping');
+          console.log('\n=== Search Terminated ===');
+          console.log('Broad search returned no results');
           break;
         }
       } catch (error) {
@@ -97,7 +102,8 @@ export class MarketDataService {
 
     if (allResults.length === 0 && searchTerms.length > 0) {
       const broadestTerm = searchTerms[searchTerms.length - 1].split(' ')[0];
-      console.log('Trying last resort broad search with term:', broadestTerm);
+      console.log('\n=== Last Resort Search ===');
+      console.log('Using broadest term:', broadestTerm);
       try {
         const result = await this.valuer.findSimilarItems(broadestTerm, baseValue);
         const simplifiedData = this.simplifyAuctionData(result);
@@ -106,11 +112,16 @@ export class MarketDataService {
           data: simplifiedData,
           relevance: 'broad'
         });
+        console.log('Last resort search results:', simplifiedData.length, 'items');
       } catch (error) {
         console.warn('Last resort search failed:', error);
       }
     }
 
+    console.log('\n=== Final Results Summary ===');
+    console.log('Total searches completed:', allResults.length);
+    console.log('Total items found:', allResults.reduce((sum, r) => sum + r.data.length, 0));
+    
     return allResults;
   }
 }

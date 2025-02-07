@@ -49,8 +49,15 @@ export class JustifierAgent {
     const allSearchTerms = await this.getSearchStrategy(text);
     const allResults = await this.marketData.searchMarketData(allSearchTerms, 1000);
     
-    console.log('\n=== Sending to OpenAI ===');
-    console.log('Number of market results:', allResults.length);
+    console.log('\n=== Market Data Summary ===');
+    console.log('Total search results:', allResults.length);
+    console.log('Results per search term:');
+    allResults.forEach(result => {
+      console.log(`- "${result.query}": ${result.data.length} items`);
+    });
+
+    const prompt = createValueRangeFinderPrompt(text, allResults);
+    console.log('\n=== Generated Prompt ===\n', prompt);
 
     const completion = await this.openai.chat.completions.create({
       model: "o3-mini",
@@ -61,24 +68,26 @@ export class JustifierAgent {
         },
         {
           role: "user",
-          content: createValueRangeFinderPrompt(text, allResults)
+          content: prompt
         }
       ]
     });
 
-    console.log('OpenAI response received:', completion.choices[0]?.message?.content || 'No content');
+    const aiResponse = completion.choices[0]?.message?.content;
+    console.log('\n=== OpenAI Raw Response ===\n', aiResponse || 'No content');
 
     try {
-      const content = completion.choices[0]?.message?.content;
-      if (!content) {
+      if (!aiResponse) {
         throw new Error('No response from OpenAI');
       }
       
-      const response = JSON.parse(content);
+      const response = JSON.parse(aiResponse);
+      console.log('\n=== Parsed Response ===\n', JSON.stringify(response, null, 2));
       
       const minValue = response.minValue || 0;
       const maxValue = response.maxValue || 0;
       const mostLikelyValue = response.mostLikelyValue || 0;
+      const auctionResults = response.auctionResults || [];
       
       if (maxValue < minValue * 4.5) { // Ensure at least 350% difference
         const midPoint = (maxValue + minValue) / 2;
@@ -86,7 +95,8 @@ export class JustifierAgent {
           minValue: Math.floor(midPoint / 3.25),
           maxValue: Math.ceil(midPoint * 3.25),
           mostLikelyValue: Math.round(midPoint),
-          explanation: response.explanation || 'Unable to generate explanation'
+          explanation: response.explanation || 'Unable to generate explanation',
+          auctionResults: auctionResults
         };
       }
       
@@ -94,7 +104,8 @@ export class JustifierAgent {
         minValue,
         maxValue,
         mostLikelyValue,
-        explanation: response.explanation || 'Unable to generate explanation'
+        explanation: response.explanation || 'Unable to generate explanation',
+        auctionResults: auctionResults
       };
     } catch (error) {
       console.error('Failed to parse AI response:', error);

@@ -91,12 +91,13 @@ app.post('/api/find-value-range', async (req, res) => {
     const { text } = FindValueRequestSchema.parse(req.body);
     const result = await justifier.findValueRange(text);
     
-    res.json({ 
+    res.json({
       success: true, 
       minValue: result.minValue,
       maxValue: result.maxValue,
       mostLikelyValue: result.mostLikelyValue,
-      explanation: result.explanation
+      explanation: result.explanation,
+      auctionResults: result.auctionResults || []
     });
   } catch (error) {
     console.error('Error:', error);
