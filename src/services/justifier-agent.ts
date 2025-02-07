@@ -47,7 +47,7 @@ export class JustifierAgent {
     console.log('Finding value range for:', text);
     
     const allSearchTerms = await this.getSearchStrategy(text);
-    const allResults = await this.marketData.searchMarketData(allSearchTerms, 1000);
+    const allResults = await this.marketData.searchMarketData(allSearchTerms, undefined, false);
     
     console.log('\n=== Market Data Summary ===');
     console.log('Total search results:', allResults.length);
@@ -117,7 +117,7 @@ export class JustifierAgent {
     console.log('Justifying valuation for:', { text, value });
     
     const allSearchTerms = await this.getSearchStrategy(text, value);
-    const allResults = await this.marketData.searchMarketData(allSearchTerms, value);
+    const allResults = await this.marketData.searchMarketData(allSearchTerms, value, true);
 
     const completion = await this.openai.chat.completions.create({
       model: "o3-mini",
@@ -154,7 +154,7 @@ export class JustifierAgent {
     console.log('Finding value for:', text);
     
     const allSearchTerms = await this.getSearchStrategy(text);
-    const allResults = await this.marketData.searchMarketData(allSearchTerms);
+    const allResults = await this.marketData.searchMarketData(allSearchTerms, undefined, false);
 
     console.log('\n=== Final Prompt to GPT ===\nFirst 10 lines:',
       createValueFinderPrompt(text, allResults)

@@ -6,7 +6,7 @@ export class MarketDataService {
   constructor(private valuer: ValuerService) {}
 
   private simplifyAuctionData(data: { hits?: any[] }): SimplifiedAuctionItem[] {
-    if (!Array.isArray(data?.hits)) {
+    if (!Array.isArray(data?.hits)) { 
       console.log('No valid hits array in response data');
       console.log('Raw response structure:', JSON.stringify(data, null, 2));
       return [];
@@ -45,16 +45,34 @@ export class MarketDataService {
     return result;
   }
 
-  async searchMarketData(searchTerms: string[], baseValue?: number): Promise<MarketDataResult[]> {
+  async searchMarketData(
+    searchTerms: string[],
+    targetValue?: number,
+    isJustify: boolean = false
+  ): Promise<MarketDataResult[]> {
     const allResults: MarketDataResult[] = [];
-    const minPrice = 250; // Set minimum price for all searches
+    let minPrice: number | undefined;
+    let maxPrice: number | undefined;
+
+    if (isJustify && targetValue) {
+      // For justify endpoint, use 70%-130% range of target value
+      minPrice = Math.floor(targetValue * 0.7);
+      maxPrice = Math.ceil(targetValue * 1.3);
+    } else if (!isJustify) {
+      // For find-value and find-value-range endpoints, use minimum threshold
+      minPrice = 250;
+    }
+
     console.log('\n=== Starting Market Data Search ===\n');
     console.log('Search terms:', JSON.stringify(searchTerms, null, 2));
+    if (isJustify) {
+      console.log('Justify mode - searching with price range:', { minPrice, maxPrice });
+    }
     
     for (const query of searchTerms) {
       console.log(`\n=== Searching Term: "${query}" ===`);
       try {
-        const result = await this.valuer.search(query, minPrice);
+        const result = await this.valuer.search(query, minPrice, maxPrice);
         const simplifiedData = this.simplifyAuctionData(result);
         
         console.log('\nRaw data structure:', {
@@ -106,7 +124,7 @@ export class MarketDataService {
       console.log('\n=== Last Resort Search ===');
       console.log('Using broadest term:', broadestTerm);
       try {
-        const result = await this.valuer.findSimilarItems(broadestTerm, baseValue);
+        const result = await this.valuer.findSimilarItems(broadestTerm, targetValue);
         const simplifiedData = this.simplifyAuctionData(result);
         allResults.push({ 
           query: broadestTerm, 
