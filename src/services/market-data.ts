@@ -47,13 +47,14 @@ export class MarketDataService {
 
   async searchMarketData(searchTerms: string[], baseValue?: number): Promise<MarketDataResult[]> {
     const allResults: MarketDataResult[] = [];
+    const minPrice = 250; // Set minimum price for all searches
     console.log('\n=== Starting Market Data Search ===\n');
     console.log('Search terms:', JSON.stringify(searchTerms, null, 2));
     
     for (const query of searchTerms) {
       console.log(`\n=== Searching Term: "${query}" ===`);
       try {
-        const result = await this.valuer.search(query);
+        const result = await this.valuer.search(query, minPrice);
         const simplifiedData = this.simplifyAuctionData(result);
         
         console.log('\nRaw data structure:', {
