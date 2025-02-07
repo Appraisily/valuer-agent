@@ -92,7 +92,18 @@ describe('JustifierAgent', () => {
       const mockCompletion = {
         choices: [{
           message: {
-            content: 'Test justification'
+            content: JSON.stringify({
+              explanation: 'Test justification',
+              auctionResults: [
+                {
+                  title: 'Test Item',
+                  price: 1000,
+                  currency: 'USD',
+                  house: 'Test House',
+                  date: '2024-01-01'
+                }
+              ]
+            })
           }
         }]
       };
@@ -102,7 +113,10 @@ describe('JustifierAgent', () => {
 
       const result = await agent.justify('test item', 1000);
 
-      expect(result).toBe('Test justification');
+      expect(result).toEqual({
+        explanation: 'Test justification',
+        auctionResults: expect.arrayContaining([expect.objectContaining({ price: 1000 })])
+      });
     });
   });
 });

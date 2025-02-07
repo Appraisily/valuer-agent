@@ -2,31 +2,40 @@
 
 An intelligent service that provides detailed justifications for antique and collectible valuations using OpenAI's GPT model and real-time market data.
 
+## Tech Stack
+
+- 🚀 Node.js with Express
+- 🔒 Google Cloud Secret Manager for secure API key storage
+- 🤖 OpenAI GPT integration
+- ✨ TypeScript with strict type safety
+- 🧪 Vitest for testing
+- 🐳 Docker support
+
 ## Features
 
 - 🤖 AI-powered valuation analysis using OpenAI's GPT model
-- 📊 Real-time market data integration
+- 📊 Real-time market data integration via Valuer API
 - 🎯 Precise value estimation with detailed justifications
 - 📈 Value range analysis with confidence levels
 - 🔍 Smart search strategy for finding comparable items
-- ✨ TypeScript with full type safety
+- 🔐 Secure API key management
 - 🧪 Comprehensive test suite
 
 ## Project Structure
 
 ```
 src/
-├── server.ts              # Express server setup and API routes
+├── server.ts                # Express server setup and API routes
 ├── services/
-│   ├── justifier-agent.ts # Main AI valuation logic
-│   ├── market-data.ts     # Market data processing
-│   ├── valuer.ts         # External valuation service integration
-│   ├── types.ts          # Shared TypeScript interfaces
-│   ├── prompts/          # AI prompt templates
+│   ├── justifier-agent.ts   # Main AI valuation logic
+│   ├── market-data.ts       # Market data processing
+│   ├── valuer.ts           # Valuer API integration
+│   ├── types.ts            # Shared TypeScript interfaces
+│   ├── prompts/            # AI prompt templates
 │   │   └── index.ts
 │   └── utils/
-│       └── tokenizer.ts   # Token management utilities
-└── tests/                # Test suites
+│       └── tokenizer.ts     # Token management utilities
+└── tests/                  # Test suites
 ```
 
 ## API Endpoints
@@ -71,7 +80,17 @@ Response:
   "minValue": 1500,
   "maxValue": 5000,
   "mostLikelyValue": 2500,
-  "explanation": "Analysis of value range factors..."
+  "explanation": "Analysis of value range factors...",
+  "auctionResults": [
+    {
+      "title": "Similar antique table",
+      "price": 2300,
+      "currency": "USD",
+      "house": "Example Auction House",
+      "date": "2024-01-15",
+      "description": "Detailed item description..."
+    }
+  ]
 }
 ```
 
@@ -92,7 +111,17 @@ Response:
 ```json
 {
   "success": true,
-  "justification": "Detailed market analysis..."
+  "explanation": "Concise justification of the value based on auction results (under 100 words)",
+  "auctionResults": [
+    {
+      "title": "Similar antique table",
+      "price": 2300,
+      "currency": "USD",
+      "house": "Example Auction House",
+      "date": "2024-01-15",
+      "description": "Detailed item description..."
+    }
+  ]
 }
 ```
 
@@ -120,36 +149,18 @@ Response:
 
 1. **JustifierAgent**
    - Manages interaction with OpenAI's GPT model
-   - Implements valuation logic and analysis
-   - Handles search strategy generation
+   - Implements smart search strategies
+   - Handles value analysis and justification
 
 2. **MarketDataService**
    - Processes and normalizes market data
-   - Implements token management for large datasets
+   - Implements token management
    - Handles data relevance scoring
 
 3. **ValuerService**
-   - Integrates with external valuation APIs
+   - Integrates with Valuer API
    - Manages market data retrieval
    - Implements price range calculations
-
-### Type Safety
-
-The project uses TypeScript with strict type checking:
-
-```typescript
-interface ValueResponse {
-  value: number;
-  explanation: string;
-}
-
-interface ValueRangeResponse {
-  minValue: number;
-  maxValue: number;
-  mostLikelyValue: number;
-  explanation: string;
-}
-```
 
 ### Testing
 
@@ -157,6 +168,12 @@ Run the test suite:
 ```bash
 npm test
 ```
+
+The test suite includes:
+- Unit tests for the JustifierAgent
+- Value calculation validation
+- Range analysis verification
+- API endpoint testing
 
 ## Docker Support
 
@@ -167,13 +184,19 @@ docker build -t valuation-justifier .
 docker run -p 8080:8080 valuation-justifier
 ```
 
-## Contributing
+## Environment Variables
 
-1. Fork the repository
-2. Create your feature branch
-3. Commit your changes
-4. Push to the branch
-5. Create a Pull Request
+- `PORT`: Server port (default: 8080)
+- `GOOGLE_CLOUD_PROJECT_ID`: Google Cloud project ID for Secret Manager
+- OpenAI API key (stored in Google Cloud Secret Manager)
+
+## Scripts
+
+- `npm run dev`: Start development server with hot reload
+- `npm run build`: Build for production
+- `npm start`: Start production server
+- `npm test`: Run test suite
+- `npm run lint`: Run ESLint
 
 ## License
 

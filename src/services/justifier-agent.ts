@@ -113,7 +113,7 @@ export class JustifierAgent {
     }
   }
 
-  async justify(text: string, value: number): Promise<string> {
+  async justify(text: string, value: number): Promise<JustifyResponse> {
     console.log('Justifying valuation for:', { text, value });
     
     const allSearchTerms = await this.getSearchStrategy(text, value);
@@ -133,7 +133,21 @@ export class JustifierAgent {
       ]
     });
 
-    return completion.choices[0]?.message?.content || 'Unable to generate justification';
+    try {
+      const content = completion.choices[0]?.message?.content;
+      if (!content) {
+        throw new Error('No response from OpenAI');
+      }
+      
+      const response = JSON.parse(content);
+      return {
+        explanation: response.explanation || 'Unable to generate explanation',
+        auctionResults: response.auctionResults || []
+      };
+    } catch (error) {
+      console.error('Failed to parse AI response:', error);
+      throw new Error('Failed to generate justification');
+    }
   }
 
   async findValue(text: string): Promise<ValueResponse> {

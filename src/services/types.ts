@@ -18,6 +18,11 @@ export interface ValueResponse {
   explanation: string;
 }
 
+export interface JustifyResponse {
+  explanation: string;
+  auctionResults: SimplifiedAuctionItem[];
+}
+
 export interface ValuerLot {
   title: string;
   price: {

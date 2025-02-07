@@ -31,19 +31,33 @@ Example response format:
 
 export function createJustificationPrompt(text: string, value: number, allResults: any[]): string {
   return `
-Analyze if ${value} is a reasonable value for:
+Find auction results that justify or challenge the value of ${value} for:
 "${text}"
 
-Here are relevant auction results for comparison:
+Here are auction results for comparison:
 
 ${formatAuctionResults(allResults)}
 
-Provide a detailed analysis that:
-1. Compares the proposed value to actual sales
-2. Identifies key value factors
-3. Explains market trends
-4. Considers condition and provenance
-5. References specific comparable sales
+Format your response as:
+{
+  "explanation": [Justify in less than 100 words why the value is reasonable or not],
+  "auctionResults": [
+    {
+      "title": [lot title],
+      "price": [realized price],
+      "currency": [currency code],
+      "house": [auction house name],
+      "date": [sale date],
+      "description": [lot description if available]
+    },
+    ... up to 10 most relevant results
+  ]
+}
+
+IMPORTANT:
+- Keep the explanation under 100 words
+- Include exactly 10 auction results, prioritizing the most relevant comparables
+- Focus on results that support or challenge the proposed value
 `;
 }
 

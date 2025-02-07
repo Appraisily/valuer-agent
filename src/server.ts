@@ -48,8 +48,12 @@ app.post('/api/justify', async (req, res) => {
     }
 
     const { text, value } = RequestSchema.parse(req.body);
-    const justification = await justifier.justify(text, value);
-    res.json({ success: true, justification });
+    const result = await justifier.justify(text, value);
+    res.json({ 
+      success: true, 
+      explanation: result.explanation,
+      auctionResults: result.auctionResults 
+    });
   } catch (error) {
     console.error('Error:', error);
     res.status(400).json({ 
