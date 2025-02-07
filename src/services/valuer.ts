@@ -14,7 +14,7 @@ export interface ValuerSearchResponse {
 }
 
 export class ValuerService {
-  private baseUrl = 'https://valuer-agent-856401495068.us-central1.run.app/api/search';
+  private baseUrl = 'https://valuer-856401495068.us-central1.run.app/api/search';
 
   async search(query: string, minPrice?: number, maxPrice?: number): Promise<ValuerSearchResponse> {
     const params = new URLSearchParams({
