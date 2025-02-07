@@ -48,6 +48,9 @@ export class JustifierAgent {
     
     const allSearchTerms = await this.getSearchStrategy(text);
     const allResults = await this.marketData.searchMarketData(allSearchTerms, 1000);
+    
+    console.log('\n=== Sending to OpenAI ===');
+    console.log('Number of market results:', allResults.length);
 
     const completion = await this.openai.chat.completions.create({
       model: "o3-mini",
@@ -62,6 +65,8 @@ export class JustifierAgent {
         }
       ]
     });
+
+    console.log('OpenAI response received:', completion.choices[0]?.message?.content || 'No content');
 
     try {
       const content = completion.choices[0]?.message?.content;
