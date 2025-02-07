@@ -47,7 +47,6 @@ export class MarketDataService {
 
   async searchMarketData(searchTerms: string[], baseValue?: number): Promise<MarketDataResult[]> {
     const allResults: MarketDataResult[] = [];
-    let totalItems = 0;
     console.log('\n=== Starting Market Data Search ===');
     
     for (const query of searchTerms) {
@@ -75,14 +74,13 @@ export class MarketDataService {
         );
         
         if (resultCount > 0) {
-          totalItems += resultCount;
           allResults.push({ 
             query, 
             data: simplifiedData,
             relevance: resultCount <= 400 ? 'high' : 'broad'
           });
           
-          if (totalItems >= 5 && allResults.some(r => r.relevance === 'high')) {
+          if (allResults.length >= 3 && allResults.some(r => r.relevance === 'high')) {
             console.log('Found sufficient relevant items, stopping search');
             break;
           }
@@ -97,7 +95,7 @@ export class MarketDataService {
       }
     }
 
-    if (totalItems === 0 && searchTerms.length > 0) {
+    if (allResults.length === 0 && searchTerms.length > 0) {
       const broadestTerm = searchTerms[searchTerms.length - 1].split(' ')[0];
       console.log('Trying last resort broad search with term:', broadestTerm);
       try {
