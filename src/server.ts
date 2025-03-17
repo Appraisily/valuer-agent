@@ -41,6 +41,12 @@ const FindValueRequestSchema = z.object({
   text: z.string(),
 });
 
+const AuctionResultsRequestSchema = z.object({
+  keyword: z.string(),
+  minPrice: z.number().optional(),
+  limit: z.number().optional(),
+});
+
 app.post('/api/justify', async (req, res) => {
   try {
     if (!openai || !justifier) {
@@ -108,6 +114,42 @@ app.post('/api/find-value-range', async (req, res) => {
     res.status(400).json({ 
       success: false, 
       error: error instanceof Error ? error.message : 'Unknown error' 
+    });
+  }
+});
+
+app.post('/api/auction-results', async (req, res) => {
+  try {
+    const { keyword, minPrice, limit } = AuctionResultsRequestSchema.parse(req.body);
+    
+    const results = await valuer.findValuableResults(keyword, minPrice, limit);
+    
+    // Process the hits to create a more detailed response
+    const auctionResults = results.hits.map(hit => ({
+      title: hit.lotTitle,
+      price: {
+        amount: hit.priceResult,
+        currency: hit.currencyCode,
+        symbol: hit.currencySymbol
+      },
+      auctionHouse: hit.houseName,
+      date: hit.dateTimeLocal,
+      lotNumber: hit.lotNumber,
+      saleType: hit.saleType
+    }));
+    
+    res.json({
+      success: true,
+      keyword,
+      totalResults: auctionResults.length,
+      minPrice: minPrice || 1000,
+      auctionResults
+    });
+  } catch (error) {
+    console.error('Error fetching auction results:', error);
+    res.status(400).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
     });
   }
 });

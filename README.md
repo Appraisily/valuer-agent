@@ -18,6 +18,7 @@ An intelligent service that provides detailed justifications for antique and col
 - 🎯 Precise value estimation with detailed justifications
 - 📈 Value range analysis with confidence levels
 - 🔍 Smart search strategy for finding comparable items
+- 🔎 Valuable auction results discovery from keywords
 - 🔐 Secure API key management
 - 🧪 Comprehensive test suite
 
@@ -121,6 +122,45 @@ Response:
       "date": "2024-01-15",
       "description": "Detailed item description..."
     }
+  ]
+}
+```
+
+### Find Valuable Auction Results
+Retrieves valuable auction results for a specific search keyword.
+
+```http
+POST /api/auction-results
+Content-Type: application/json
+
+{
+  "keyword": "Elgin Pocket Watch", 
+  "minPrice": 1000,  // Optional, defaults to 1000
+  "limit": 10        // Optional, defaults to 10
+}
+```
+
+Response:
+```json
+{
+  "success": true,
+  "keyword": "Elgin Pocket Watch",
+  "totalResults": 3,
+  "minPrice": 1000,
+  "auctionResults": [
+    {
+      "title": "Antique 14K Gold Elgin Pocket Watch",
+      "price": {
+        "amount": 2500,
+        "currency": "USD",
+        "symbol": "$"
+      },
+      "auctionHouse": "Sotheby's",
+      "date": "2023-05-15",
+      "lotNumber": "156",
+      "saleType": "Online Auction"
+    },
+    // Additional auction results...
   ]
 }
 ```

@@ -15,6 +15,50 @@ export interface ValuerSearchResponse {
 
 export class ValuerService {
   private baseUrl = 'https://valuer-856401495068.us-central1.run.app/api/search';
+  
+  /**
+   * Finds valuable auction results for a given keyword
+   * @param keyword User search keyword
+   * @param minPrice Minimum price to filter results (default: 1000)
+   * @param limit Maximum number of results to return (default: 10)
+   * @returns Promise with auction results matching the criteria
+   */
+  async findValuableResults(keyword: string, minPrice: number = 1000, limit: number = 10): Promise<ValuerSearchResponse> {
+    // Search with the original keyword
+    let results = await this.search(keyword, minPrice);
+    
+    // If not enough results, try with a more focused search by removing some words
+    if (results.hits.length < limit) {
+      const keywords = keyword.split(' ');
+      // If we have multiple words, try with fewer words
+      if (keywords.length > 1) {
+        // Take the most significant words (skip common words like "antique", "vintage", etc.)
+        const significantKeywords = keywords
+          .filter(word => !['antique', 'vintage', 'old', 'the', 'a', 'an'].includes(word.toLowerCase()))
+          .slice(0, 2)
+          .join(' ');
+          
+        if (significantKeywords) {
+          const additionalResults = await this.search(significantKeywords, minPrice);
+          
+          // Merge results, removing duplicates by title
+          const existingTitles = new Set(results.hits.map(hit => hit.lotTitle));
+          additionalResults.hits.forEach(hit => {
+            if (!existingTitles.has(hit.lotTitle)) {
+              results.hits.push(hit);
+              existingTitles.add(hit.lotTitle);
+            }
+          });
+        }
+      }
+    }
+    
+    // Sort by price (highest first) and limit results
+    results.hits.sort((a, b) => b.priceResult - a.priceResult);
+    results.hits = results.hits.slice(0, limit);
+    
+    return results;
+  }
 
   async search(query: string, minPrice?: number, maxPrice?: number): Promise<ValuerSearchResponse> {
     const params = new URLSearchParams({

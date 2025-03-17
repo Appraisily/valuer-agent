@@ -29,3 +29,12 @@ curl -X POST "${BASE_URL}/api/justify" \
     "text": "Antique Victorian mahogany dining table, circa 1860",
     "value": 2500
   }' | json_pp
+
+echo -e "\n${BLUE}Testing Auction Results endpoint${NC}"
+curl -X POST "${BASE_URL}/api/auction-results" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "keyword": "Elgin Pocket Watch",
+    "minPrice": 1000,
+    "limit": 10
+  }' | json_pp
