@@ -40,7 +40,7 @@ ${formatAuctionResults(allResults)}
 
 Format your response as:
 {
-  "explanation": [Justify in less than 100 words why the value is reasonable or not],
+  "explanation": [Very brief 3-4 line summary of whether the value is reasonable],
   "auctionResults": [
     {
       "title": [lot title],
@@ -55,9 +55,10 @@ Format your response as:
 }
 
 IMPORTANT:
-- Keep the explanation under 100 words
+- Extremely concise explanation - maximum 4 lines only
+- Focus only on key facts: is the value reasonable? why/why not?
 - Include exactly 10 auction results, prioritizing the most relevant comparables
-- Focus on results that support or challenge the proposed value
+- Present clear conclusion about the value with minimal justification
 `;
 }
 
