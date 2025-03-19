@@ -142,7 +142,8 @@ export class JustifierAgent {
       const response = JSON.parse(content);
       return {
         explanation: response.explanation || 'Unable to generate explanation',
-        auctionResults: response.auctionResults || []
+        auctionResults: response.auctionResults || [],
+        allSearchResults: allResults // Include all search results from all queries
       };
     } catch (error) {
       console.error('Failed to parse AI response:', error);

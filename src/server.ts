@@ -58,7 +58,8 @@ app.post('/api/justify', async (req, res) => {
     res.json({ 
       success: true, 
       explanation: result.explanation,
-      auctionResults: result.auctionResults 
+      auctionResults: result.auctionResults, 
+      allSearchResults: result.allSearchResults // Include all search results in response
     });
   } catch (error) {
     console.error('Error:', error);

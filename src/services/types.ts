@@ -21,6 +21,7 @@ export interface ValueResponse {
 export interface JustifyResponse {
   explanation: string;
   auctionResults: SimplifiedAuctionItem[];
+  allSearchResults?: MarketDataResult[]; // All results from search queries
 }
 
 export interface ValuerLot {
