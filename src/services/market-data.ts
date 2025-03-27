@@ -48,7 +48,8 @@ export class MarketDataService {
   async searchMarketData(
     searchTerms: string[],
     targetValue?: number,
-    isJustify: boolean = false
+    isJustify: boolean = false,
+    minRelevanceScore: number = 0.5
   ): Promise<MarketDataResult[]> {
     const allResults: MarketDataResult[] = [];
     let minPrice: number | undefined;
@@ -65,14 +66,29 @@ export class MarketDataService {
 
     console.log('\n=== Starting Market Data Search ===\n');
     console.log('Search terms:', JSON.stringify(searchTerms, null, 2));
+    console.log('Minimum relevance score:', minRelevanceScore);
     if (isJustify) {
       console.log('Justify mode - searching with price range:', { minPrice, maxPrice });
     }
     
-    for (const query of searchTerms) {
+    // Sort search terms by specificity (number of words)
+    const sortedSearchTerms = [...searchTerms].sort((a, b) => 
+      b.split(' ').length - a.split(' ').length
+    );
+    
+    // Calculate how many high-quality results we need based on minRelevanceScore
+    const requiredHighRelevanceResults = minRelevanceScore >= 0.7 ? 5 : 3;
+    
+    for (const query of sortedSearchTerms) {
       console.log(`\n=== Searching Term: "${query}" ===`);
       try {
-        const result = await this.valuer.search(query, minPrice, maxPrice);
+        // Send a more focused search for higher relevance scores
+        const result = await this.valuer.search(
+          query, 
+          minPrice, 
+          maxPrice, 
+          minRelevanceScore >= 0.7 ? 15 : undefined // Limit results for higher relevance
+        );
         const simplifiedData = this.simplifyAuctionData(result);
         
         console.log('\nRaw data structure:', {
@@ -96,15 +112,32 @@ export class MarketDataService {
         console.log(`\nProcessed ${resultCount} items for query "${query}"`);
         
         if (resultCount > 0) {
+          // Calculate relevance score based on query specificity and result count
+          const specificity = query.split(' ').length / 5; // 5 words is considered highly specific
+          const sizeScore = Math.min(1, 10 / Math.max(1, resultCount)); // Fewer results often means more relevant
+          
+          const relevanceScore = Math.min(1, (specificity + sizeScore) / 2);
+          const relevanceLabel = 
+            relevanceScore >= 0.8 ? 'very high' :
+            relevanceScore >= 0.6 ? 'high' :
+            relevanceScore >= 0.4 ? 'medium' : 'broad';
+            
+          console.log(`Relevance calculation: specificity=${specificity.toFixed(2)}, sizeScore=${sizeScore.toFixed(2)}, final=${relevanceScore.toFixed(2)} (${relevanceLabel})`);
+          
           allResults.push({ 
             query, 
             data: simplifiedData,
-            relevance: resultCount <= 400 ? 'high' : 'broad'
+            relevance: relevanceLabel
           });
           
-          if (allResults.length >= 3 && allResults.some(r => r.relevance === 'high')) {
+          // Stop if we have enough high-quality results
+          const highRelevanceCount = allResults.filter(
+            r => r.relevance === 'very high' || r.relevance === 'high'
+          ).length;
+          
+          if (highRelevanceCount >= requiredHighRelevanceResults) {
             console.log('\n=== Search Complete ===');
-            console.log('Found sufficient relevant items (3+ results with high relevance)');
+            console.log(`Found sufficient relevant items (${highRelevanceCount} results with high relevance)`);
             break;
           }
         }

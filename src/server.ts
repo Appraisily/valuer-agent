@@ -39,6 +39,7 @@ const RequestSchema = z.object({
 
 const FindValueRequestSchema = z.object({
   text: z.string(),
+  useAccurateModel: z.boolean().optional(),
 });
 
 const AuctionResultsRequestSchema = z.object({
@@ -99,8 +100,12 @@ app.post('/api/find-value-range', async (req, res) => {
       throw new Error('OpenAI client not initialized');
     }
 
-    const { text } = FindValueRequestSchema.parse(req.body);
-    const result = await justifier.findValueRange(text);
+    const { text, useAccurateModel } = FindValueRequestSchema.parse(req.body);
+    
+    console.log(`Processing find-value-range request for: "${text.substring(0, 100)}..." (useAccurateModel: ${useAccurateModel === true})`);
+    
+    // Use the accurate model if specified
+    const result = await justifier.findValueRange(text, useAccurateModel === true);
     
     res.json({
       success: true, 
@@ -108,10 +113,16 @@ app.post('/api/find-value-range', async (req, res) => {
       maxValue: result.maxValue,
       mostLikelyValue: result.mostLikelyValue,
       explanation: result.explanation,
-      auctionResults: result.auctionResults || []
+      auctionResults: result.auctionResults || [],
+      confidenceLevel: result.confidenceLevel,
+      marketTrend: result.marketTrend,
+      keyFactors: result.keyFactors,
+      dataQuality: result.dataQuality
     });
+    
+    console.log(`Completed find-value-range request with confidence: ${result.confidenceLevel}, trend: ${result.marketTrend}`);
   } catch (error) {
-    console.error('Error:', error);
+    console.error('Error processing find-value-range request:', error);
     res.status(400).json({ 
       success: false, 
       error: error instanceof Error ? error.message : 'Unknown error' 

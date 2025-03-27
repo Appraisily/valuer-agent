@@ -60,13 +60,18 @@ export class ValuerService {
     return results;
   }
 
-  async search(query: string, minPrice?: number, maxPrice?: number): Promise<ValuerSearchResponse> {
+  async search(query: string, minPrice?: number, maxPrice?: number, limit?: number): Promise<ValuerSearchResponse> {
     const params = new URLSearchParams({
       query,
       ...(minPrice && { 'priceResult[min]': minPrice.toString() }),
-      ...(maxPrice && { 'priceResult[max]': maxPrice.toString() })
+      ...(maxPrice && { 'priceResult[max]': maxPrice.toString() }),
+      ...(limit && { 'limit': limit.toString() })
     });
 
+    // Add sorting by relevance and date for more accurate results
+    params.append('sort', 'relevance');
+    
+    console.log(`Executing valuer search: ${this.baseUrl}?${params}`);
     const response = await fetch(`${this.baseUrl}?${params}`);
 
     if (!response.ok) {
@@ -86,8 +91,53 @@ export class ValuerService {
       houseName: lot.auctionHouse,
       dateTimeLocal: lot.date,
       lotNumber: lot.lotNumber,
-      saleType: lot.saleType
+      saleType: lot.saleType,
+      lotDescription: lot.description || ''
     }));
+    
+    // If we specified a limit but got fewer results, add supplementary results
+    if (limit && hits.length < limit && minPrice && minPrice > 500) {
+      console.log(`Found only ${hits.length} results with price minimum ${minPrice}, trying with lower minimum...`);
+      
+      // Try with a lower price threshold for supplementary results
+      const lowerMinPrice = Math.floor(minPrice * 0.7);
+      const supplementaryParams = new URLSearchParams({
+        query,
+        'priceResult[min]': lowerMinPrice.toString(),
+        ...(maxPrice && { 'priceResult[max]': maxPrice.toString() }),
+        'limit': (limit - hits.length).toString(),
+        'sort': 'relevance'
+      });
+      
+      try {
+        const supplementaryResponse = await fetch(`${this.baseUrl}?${supplementaryParams}`);
+        if (supplementaryResponse.ok) {
+          const supplementaryData = await supplementaryResponse.json() as ValuerResponse;
+          const supplementaryLots = Array.isArray(supplementaryData?.data?.lots) ? supplementaryData.data.lots : [];
+          
+          // Transform and add the supplementary lots
+          const existingTitles = new Set(hits.map(hit => hit.lotTitle));
+          const supplementaryHits = supplementaryLots
+            .map((lot: ValuerLot) => ({
+              lotTitle: lot.title,
+              priceResult: lot.price.amount,
+              currencyCode: lot.price.currency,
+              currencySymbol: lot.price.symbol,
+              houseName: lot.auctionHouse,
+              dateTimeLocal: lot.date,
+              lotNumber: lot.lotNumber,
+              saleType: lot.saleType,
+              lotDescription: lot.description || ''
+            }))
+            .filter(hit => !existingTitles.has(hit.lotTitle));
+            
+          hits.push(...supplementaryHits);
+          console.log(`Added ${supplementaryHits.length} supplementary results with lower price threshold (${lowerMinPrice})`);
+        }
+      } catch (error) {
+        console.warn('Error fetching supplementary results:', error);
+      }
+    }
     
     console.log('Valuer service raw response (first 10 hits):', {
       total: hits.length,

@@ -35,6 +35,7 @@ export interface ValuerLot {
   date: string;
   lotNumber: string;
   saleType: string;
+  description?: string;
 }
 
 export interface ValuerResponse {
@@ -52,10 +53,20 @@ export interface ValuerResponse {
     totalResults: number;
   };
 }
+export interface AuctionItemWithRelevance extends SimplifiedAuctionItem {
+  relevanceScore?: number;
+  adjustmentFactor?: number;
+  relevanceReason?: string;
+}
+
 export interface ValueRangeResponse {
   minValue: number;
   maxValue: number;
   mostLikelyValue: number;
   explanation: string;
-  auctionResults: SimplifiedAuctionItem[];
+  auctionResults: AuctionItemWithRelevance[];
+  confidenceLevel: number;
+  marketTrend: 'rising' | 'stable' | 'declining';
+  keyFactors?: string[];
+  dataQuality?: 'high' | 'medium' | 'low';
 }

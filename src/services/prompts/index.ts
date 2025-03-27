@@ -1,4 +1,4 @@
-function formatAuctionResults(results: any[]): string {
+export function formatAuctionResults(results: any[]): string {
   if (!Array.isArray(results) || results.length === 0) {
     return 'No auction results available.';
   }
