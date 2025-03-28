@@ -113,6 +113,7 @@ export interface EnhancedStatistics {
   historical_significance: number; // Historical significance score (0-100)
   investment_potential: number; // Investment potential score (0-100)
   provenance_strength: number; // Provenance strength score (0-100)
+  data_quality?: string; // Data quality indicator based on search results
 }
 
 // Response for the enhanced-statistics endpoint

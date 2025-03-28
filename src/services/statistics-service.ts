@@ -18,29 +18,51 @@ export class StatisticsService {
   /**
    * Extracts optimal search keywords for finding similar items
    * @param text Description of the item
-   * @returns Array of search terms
+   * @returns Array of search terms from most specific to most general
    */
   private async extractKeywords(text: string): Promise<string[]> {
     console.log('Extracting optimized keywords for statistics:', text.substring(0, 100) + '...');
     
     try {
-      // Use simpler prompt for statistics search
+      // Enhanced prompt for more comprehensive search query generation
       const prompt = `
-Extract specific search keywords for auction databases to find comparable items for:
+Generate multiple levels of search queries for finding comparable auction items for:
 "${text}"
 
-Return a JSON array of search terms, from most specific to most general.
-Include 5-10 terms for comprehensive market data collection.
+Create a JSON array of search queries at different specificity levels:
+1. Very specific queries (5-6 words) that exactly match the item description
+2. Specific queries (3-4 words) focusing on key identifying features
+3. Moderate queries (2-3 words) capturing the item category and main characteristic
+4. Broad queries (1-2 words) for the general category
 
-Example response format:
-["exact match", "variant 1", "broader term", "category"]`;
+The goal is to ensure sufficient auction data (up to 100 items) can be found even for rare items.
+Order the array from most specific to most general.
+Include 10-15 queries for comprehensive market data collection.
+
+Example response format for "Antique Meissen Porcelain Tea Set with Floral Design, circa 1880":
+[
+  "Antique Meissen Porcelain Tea Set Floral 1880",
+  "Meissen Porcelain Tea Set Floral",
+  "Meissen Porcelain Tea Set",
+  "Antique Meissen Porcelain 1880",
+  "Meissen Porcelain Floral",
+  "Antique Tea Set 1880",
+  "Meissen Porcelain",
+  "Antique Tea Set", 
+  "Porcelain Tea Set",
+  "Meissen Tea",
+  "Antique Porcelain",
+  "Tea Set",
+  "Porcelain",
+  "Meissen"
+]`;
       
       const completion = await this.openai.chat.completions.create({
-        model: "o3-mini",
+        model: "gpt-4o",  // Use more capable model for better query generation
         messages: [
           {
             role: "system",
-            content: "You are an expert in auction terminology and item categorization."
+            content: "You are an expert in auction terminology, art, antiques, and collectibles categorization. Generate optimal search queries for finding comparable auction items."
           },
           {
             role: "user",
@@ -53,8 +75,24 @@ Example response format:
       if (!content) return [text];
       
       try {
-        const keywords = JSON.parse(content);
-        console.log('Extracted search keywords:', keywords.join(', '));
+        // Extract the JSON array from the response content
+        const jsonMatch = content.match(/\[\s*".*"\s*\]/s);
+        const jsonContent = jsonMatch ? jsonMatch[0] : content;
+        
+        const keywords = JSON.parse(jsonContent);
+        
+        // Log the structured queries by specificity level
+        console.log('Extracted search queries by specificity:');
+        const verySpecific = keywords.filter(k => k.split(' ').length >= 5);
+        const specific = keywords.filter(k => k.split(' ').length >= 3 && k.split(' ').length < 5);
+        const moderate = keywords.filter(k => k.split(' ').length === 2);
+        const broad = keywords.filter(k => k.split(' ').length === 1);
+        
+        console.log(`- Very specific (${verySpecific.length}): ${verySpecific.join(', ')}`);
+        console.log(`- Specific (${specific.length}): ${specific.join(', ')}`);
+        console.log(`- Moderate (${moderate.length}): ${moderate.join(', ')}`);
+        console.log(`- Broad (${broad.length}): ${broad.join(', ')}`);
+        
         return Array.isArray(keywords) ? keywords : [text];
       } catch (parseError) {
         console.warn('Failed to parse keywords JSON:', parseError);
@@ -69,7 +107,20 @@ Example response format:
           console.log('Extracted keywords from text:', terms.join(', '));
           return terms.length > 0 ? terms : [text];
         }
-        return [text];
+        
+        // Final fallback - use the original text plus some basic variants
+        const fallbackKeywords = [
+          text,
+          // Extract the first 3-4 words as a more focused search
+          text.split(' ').slice(0, 4).join(' '),
+          // Extract first 2 words as a broader search
+          text.split(' ').slice(0, 2).join(' '),
+          // Extract the single most important word (usually the object type)
+          text.split(' ')[text.split(' ').length > 1 ? 1 : 0]
+        ];
+        
+        console.log('Using fallback keywords:', fallbackKeywords.join(', '));
+        return fallbackKeywords;
       }
     } catch (error) {
       console.error('Error extracting keywords:', error);
@@ -78,55 +129,173 @@ Example response format:
   }
   
   /**
-   * Gather comprehensive auction data for statistical analysis
+   * Gather comprehensive auction data for statistical analysis using a progressive search strategy
    * @param text Description of the item
    * @param value Target value for the item
+   * @param targetCount Target number of auction items to gather (default: 100)
    * @returns Array of simplified auction items for analysis
    */
-  private async gatherAuctionData(text: string, value: number): Promise<SimplifiedAuctionItem[]> {
-    console.log('Gathering comprehensive auction data for statistics');
+  private async gatherAuctionData(
+    text: string, 
+    value: number, 
+    targetCount: number = 100
+  ): Promise<SimplifiedAuctionItem[]> {
+    console.log(`Gathering comprehensive auction data for statistics (target: ${targetCount} items)`);
     
-    // Extract optimal search keywords
+    // Extract optimal search keywords with multiple specificity levels
     const searchTerms = await this.extractKeywords(text);
     
-    // Search for market data using all terms, with a lower relevance threshold to gather more data
-    const allResults = await this.marketData.searchMarketData(
-      searchTerms, 
-      value,           // Target value for reference
-      false,           // Not for justification
-      0.3              // Lower relevance threshold to gather more data
-    );
+    // Group search terms by specificity level for progressive searching
+    const queryGroups = this.groupQueriesBySpecificity(searchTerms);
     
-    console.log('Market data search results:');
-    allResults.forEach(result => {
-      console.log(`- "${result.query}": ${result.data.length} items (relevance: ${result.relevance})`);
-    });
-    
-    // Combine all results into a single array
+    // Initialize results array and tracking sets
     const allItems: SimplifiedAuctionItem[] = [];
     const seenTitles = new Set<string>();
+    let totalResultsFound = 0;
     
-    // Process results in order of relevance: very high, high, medium, broad
-    const relevanceOrder = ['very high', 'high', 'medium', 'broad'];
+    console.log('Starting progressive search strategy');
     
-    for (const relevanceLevel of relevanceOrder) {
-      const relevantResults = allResults.filter(r => r.relevance === relevanceLevel);
+    // Progressive search through specificity levels
+    for (const [level, queries] of Object.entries(queryGroups)) {
+      if (totalResultsFound >= targetCount) {
+        console.log(`Already found ${totalResultsFound} items, skipping ${level} queries`);
+        continue;
+      }
       
-      for (const result of relevantResults) {
-        for (const item of result.data) {
-          // Create a unique key for each item to avoid duplicates
-          const itemKey = `${item.title}|${item.house}|${item.date}|${item.price}`;
-          
-          if (!seenTitles.has(itemKey)) {
-            allItems.push(item);
-            seenTitles.add(itemKey);
+      console.log(`\nSearching ${level} queries (${queries.length} terms) - currently have ${totalResultsFound} items`);
+      
+      // Calculate remaining items needed
+      const remainingNeeded = targetCount - totalResultsFound;
+      const relevanceThreshold = this.getRelevanceThresholdForLevel(level);
+      
+      // Search for market data using the specificity level's queries
+      const levelResults = await this.marketData.searchMarketData(
+        queries,
+        value,              // Target value for reference
+        false,              // Not for justification
+        relevanceThreshold, // Adjust relevance threshold based on specificity level
+        remainingNeeded     // Limit search to only what we still need
+      );
+      
+      console.log(`${level} search results:`);
+      levelResults.forEach(result => {
+        console.log(`- "${result.query}": ${result.data.length} items (relevance: ${result.relevance})`);
+      });
+      
+      // Process results in order of relevance within this level: very high, high, medium, broad
+      const relevanceOrder = ['very high', 'high', 'medium', 'broad'];
+      const newItemsFromLevel: SimplifiedAuctionItem[] = [];
+      
+      for (const relevanceLevel of relevanceOrder) {
+        const relevantResults = levelResults.filter(r => r.relevance === relevanceLevel);
+        
+        for (const result of relevantResults) {
+          for (const item of result.data) {
+            // Create a unique key for each item to avoid duplicates
+            const itemKey = `${item.title}|${item.house}|${item.date}|${item.price}`;
+            
+            if (!seenTitles.has(itemKey)) {
+              newItemsFromLevel.push(item);
+              seenTitles.add(itemKey);
+            }
           }
         }
       }
+      
+      // Add items from this level to the overall results
+      allItems.push(...newItemsFromLevel);
+      totalResultsFound = allItems.length;
+      
+      console.log(`Found ${newItemsFromLevel.length} new items from ${level} queries`);
+      console.log(`Total unique items so far: ${totalResultsFound}`);
+      
+      // If we found a significant number of items (5+ for very specific, 10+ for others)
+      // from this level and we're at or near our target, stop searching
+      const significantThreshold = level === 'very specific' ? 5 : 10;
+      if (newItemsFromLevel.length >= significantThreshold && totalResultsFound >= targetCount * 0.8) {
+        console.log(`Found significant number of items (${newItemsFromLevel.length}) at ${level} level, terminating search early`);
+        break;
+      }
     }
     
-    console.log(`Total unique auction items gathered: ${allItems.length}`);
-    return allItems;
+    // Log summary of gathered data
+    console.log(`\nSearch complete - total unique auction items gathered: ${allItems.length}`);
+    if (allItems.length > 0) {
+      const priceStats = {
+        min: Math.min(...allItems.map(item => item.price)),
+        max: Math.max(...allItems.map(item => item.price)),
+        avg: allItems.reduce((sum, item) => sum + item.price, 0) / allItems.length
+      };
+      console.log(`Price range: $${priceStats.min} - $${priceStats.max} (avg: $${Math.round(priceStats.avg)})`);
+    }
+    
+    // Sort by relevance to target value (closest price first)
+    return allItems.sort((a, b) => {
+      const diffA = Math.abs(a.price - value);
+      const diffB = Math.abs(b.price - value);
+      return diffA - diffB;
+    });
+  }
+  
+  /**
+   * Group search queries by specificity level for progressive searching
+   * @param queries Array of search queries
+   * @returns Object with queries grouped by specificity level
+   */
+  private groupQueriesBySpecificity(queries: string[]): Record<string, string[]> {
+    // Group queries by word count
+    const verySpecific = queries.filter(q => q.split(' ').length >= 5);
+    const specific = queries.filter(q => q.split(' ').length >= 3 && q.split(' ').length < 5);
+    const moderate = queries.filter(q => q.split(' ').length === 2);
+    const broad = queries.filter(q => q.split(' ').length === 1);
+    
+    // Ensure we have at least one query at each level (use fallbacks if needed)
+    const result: Record<string, string[]> = {
+      'very specific': verySpecific.length > 0 ? verySpecific : [queries[0]],
+      'specific': specific.length > 0 ? specific : (verySpecific.length > 0 ? [verySpecific[0]] : [queries[0]]),
+      'moderate': moderate.length > 0 ? moderate : [],
+      'broad': broad.length > 0 ? broad : []
+    };
+    
+    // If we don't have moderate queries but have specific ones, create simplified versions
+    if (result['moderate'].length === 0 && specific.length > 0) {
+      result['moderate'] = specific.map(q => q.split(' ').slice(0, 2).join(' '))
+        .filter((q, i, arr) => arr.indexOf(q) === i); // Remove duplicates
+    }
+    
+    // If we don't have broad queries but have moderate ones, take first word
+    if (result['broad'].length === 0 && result['moderate'].length > 0) {
+      result['broad'] = result['moderate'].map(q => q.split(' ')[0])
+        .filter((q, i, arr) => arr.indexOf(q) === i); // Remove duplicates
+    }
+    
+    // Last resort fallback
+    if (result['broad'].length === 0) {
+      const words = queries[0].split(' ');
+      // Try to find a substantial word (not article, etc.) for the broad query
+      const potentialBroadWords = words.filter(w => w.length > 3 && !['the', 'and', 'with'].includes(w.toLowerCase()));
+      result['broad'] = potentialBroadWords.length > 0 ? [potentialBroadWords[0]] : [words[0]];
+    }
+    
+    return result;
+  }
+  
+  /**
+   * Get appropriate relevance threshold based on specificity level
+   * @param level Specificity level
+   * @returns Relevance threshold
+   */
+  private getRelevanceThresholdForLevel(level: string): number {
+    // Adjust relevance thresholds based on specificity level
+    // More specific queries can have higher relevance requirements
+    // Broader queries need lower thresholds to find enough items
+    switch (level) {
+      case 'very specific': return 0.7;  // High relevance for very specific queries
+      case 'specific': return 0.5;       // Medium relevance for specific queries
+      case 'moderate': return 0.3;       // Lower relevance for moderate queries
+      case 'broad': return 0.2;          // Very low relevance for broad queries
+      default: return 0.3;               // Default threshold
+    }
   }
   
   /**
@@ -252,7 +421,7 @@ Example response format:
     });
     
     // Format comparable sales with percentage difference
-    const formattedSales = sortedResults.map(result => {
+    let formattedSales = sortedResults.map(result => {
       // Calculate percentage difference from target value
       const priceDiff = ((result.price - targetValue) / targetValue) * 100;
       const diffFormatted = priceDiff > 0 ? `+${priceDiff.toFixed(1)}%` : `${priceDiff.toFixed(1)}%`;
@@ -280,9 +449,15 @@ Example response format:
     
     // Insert current item after the first most relevant item
     if (formattedSales.length > 0) {
-      formattedSales.splice(1, 0, currentItem);
+      // Need to ensure diff is not undefined for type safety
+      const typeSafeFormattedSales = formattedSales.map(sale => ({
+        ...sale,
+        diff: sale.diff || '-'  // Ensure diff is never undefined
+      }));
+      typeSafeFormattedSales.splice(1, 0, currentItem);
+      formattedSales = typeSafeFormattedSales;
     } else {
-      formattedSales.push(currentItem);
+      formattedSales = [currentItem];
     }
     
     // Format percentile as ordinal number (1st, 2nd, 3rd, etc.)
@@ -399,10 +574,10 @@ Example response format:
   
   /**
    * Create default price history data when insufficient data is available
-   * @param targetValue Target value for comparison
+   * @param itemValue Target value for comparison
    * @returns Default price history data
    */
-  private createDefaultPriceHistory(targetValue: number): PriceHistoryPoint[] {
+  private createDefaultPriceHistory(itemValue: number): PriceHistoryPoint[] {
     // Create a default 6-year price history with slight rising trend
     const currentYear = new Date().getFullYear();
     const startYear = currentYear - 5;
@@ -414,14 +589,14 @@ Example response format:
       
       // Calculate price for this year (starting from approximately 80% of current value)
       const yearFactor = Math.pow(1 + defaultTrend, index);
-      const baseValue = targetValue * 0.8;
+      const baseValue = itemValue * 0.8;
       const price = Math.round(baseValue * yearFactor);
       
       // Create index based on price (normalized to 1000 for the first year)
       const baseIndex = 1000;
-      const index = Math.round(baseIndex * yearFactor);
+      const indexValue = Math.round(baseIndex * yearFactor);
       
-      return { year, price, index };
+      return { year, price, index: indexValue };
     });
   }
   
@@ -556,12 +731,12 @@ Example response format:
   /**
    * Generate price history data from auction results
    * @param auctionResults Array of auction results with dates
-   * @param targetValue Target value for the current item
+   * @param itemValue Target value for the current item
    * @returns Array of price history points by year
    */
   private generatePriceHistory(
     auctionResults: SimplifiedAuctionItem[],
-    targetValue: number
+    itemValue: number
   ): PriceHistoryPoint[] {
     console.log('Generating price history from auction data');
     
@@ -576,7 +751,7 @@ Example response format:
     
     if (datedResults.length < 3) {
       console.log('Insufficient auction data with dates for price history, using default');
-      return this.createDefaultPriceHistory(targetValue);
+      return this.createDefaultPriceHistory(itemValue);
     }
     
     try {
@@ -598,7 +773,7 @@ Example response format:
       
       if (resultsByYear.size < 2) {
         console.log('Not enough years in data for price history, using default');
-        return this.createDefaultPriceHistory(targetValue);
+        return this.createDefaultPriceHistory(itemValue);
       }
       
       // Calculate average price for each year
@@ -690,7 +865,7 @@ Example response format:
       return priceHistory;
     } catch (error) {
       console.error('Error generating price history:', error);
-      return this.createDefaultPriceHistory(targetValue);
+      return this.createDefaultPriceHistory(itemValue);
     }
   }
   
@@ -698,17 +873,56 @@ Example response format:
    * Generate enhanced statistics for an item
    * @param text Description of the item
    * @param value The target value for comparison
+   * @param targetCount Optional target number of auction items to gather (default: 100)
    * @returns Enhanced statistics response
    */
-  async generateStatistics(text: string, value: number): Promise<EnhancedStatistics> {
+  async generateStatistics(
+    text: string, 
+    value: number, 
+    targetCount: number = 100
+  ): Promise<EnhancedStatistics> {
     console.log(`Generating enhanced statistics for "${text}" with value ${value}`);
+    console.log(`Target auction data count: ${targetCount} items`);
     
-    // Gather comprehensive auction data
-    const auctionData = await this.gatherAuctionData(text, value);
+    // Gather comprehensive auction data using improved progressive search strategy
+    const startTime = Date.now();
+    const auctionData = await this.gatherAuctionData(text, value, targetCount);
+    const searchTime = (Date.now() - startTime) / 1000;
+    
+    console.log(`Found ${auctionData.length} auction items in ${searchTime.toFixed(1)} seconds`);
     
     // Calculate enhanced statistics
     const statistics = this.calculateEnhancedStatistics(auctionData, value);
     
+    // Add data quality indicator based on the amount of data found
+    const dataQualityIndicator = this.determineDataQuality(auctionData.length, targetCount);
+    console.log(`Data quality assessment: ${dataQualityIndicator}`);
+    
+    // Add data quality to the statistics
+    statistics.data_quality = dataQualityIndicator;
+    
     return statistics;
+  }
+  
+  /**
+   * Determine data quality based on how much auction data was found
+   * @param foundCount Number of auction items found
+   * @param targetCount Target number of auction items
+   * @returns Data quality indicator
+   */
+  private determineDataQuality(foundCount: number, targetCount: number): string {
+    const percentage = (foundCount / targetCount) * 100;
+    
+    if (foundCount >= targetCount * 0.9) {
+      return 'Excellent - Comprehensive market data found';
+    } else if (foundCount >= targetCount * 0.7) {
+      return 'Good - Substantial market data found';
+    } else if (foundCount >= targetCount * 0.4) {
+      return 'Moderate - Useful market data found';
+    } else if (foundCount >= targetCount * 0.2) {
+      return 'Limited - Minimal market data found';
+    } else {
+      return 'Poor - Very little market data found';
+    }
   }
 }
