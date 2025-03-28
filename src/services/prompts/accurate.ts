@@ -2,7 +2,7 @@
  * Accurate valuation prompts for more precise appraisal insights
  */
 
-import { formatAuctionResults } from './index';
+import { formatAuctionResults } from './index.js';
 
 export function createAccurateValueRangePrompt(text: string, allResults: any[]): string {
   return `

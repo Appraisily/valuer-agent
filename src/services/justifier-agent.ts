@@ -91,13 +91,13 @@ export class JustifierAgent {
         ...primaryKeywords,
         
         // Create combined searches using primary + secondary keywords
-        ...primaryKeywords.flatMap(primary => 
-          secondaryKeywords.slice(0, 3).map(secondary => `${primary} ${secondary}`)
+        ...primaryKeywords.flatMap((primary: string) => 
+          secondaryKeywords.slice(0, 3).map((secondary: string) => `${primary} ${secondary}`)
         ),
         
         // Add broader category searches with primary keywords
-        ...primaryKeywords.flatMap(primary => 
-          categoryTerms.map(category => `${primary} ${category}`)
+        ...primaryKeywords.flatMap((primary: string) => 
+          categoryTerms.map((category: string) => `${primary} ${category}`)
         )
       ];
       
