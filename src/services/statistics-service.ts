@@ -1,6 +1,5 @@
 import { 
   SimplifiedAuctionItem, 
-  MarketDataResult, 
   EnhancedStatistics, 
   HistogramBucket,
   PriceHistoryPoint
@@ -12,7 +11,7 @@ import OpenAI from 'openai';
 export class StatisticsService {
   private marketData: MarketDataService;
   
-  constructor(private openai: OpenAI, private valuer: ValuerService) {
+  constructor(private openai: OpenAI, valuer: ValuerService) {
     this.marketData = new MarketDataService(valuer);
   }
   
@@ -263,16 +262,18 @@ Example response format:
         house: result.house || 'Unknown',
         date: result.date || 'Unknown',
         price: result.price,
+        currency: result.currency || 'USD',
         diff: diffFormatted
       };
     });
     
     // Add current item to sales comparison (as the second item)
-    const currentItem = {
+    const currentItem: SimplifiedAuctionItem = {
       title: 'Your Item',
       house: '-',
       date: 'Current',
       price: targetValue,
+      currency: 'USD',
       diff: '-',
       is_current: true
     };
@@ -301,7 +302,7 @@ Example response format:
       coefficientOfVariation
     };
     
-    const additionalMetrics = this.calculateAdditionalMetrics(priceStats, targetValue);
+    const additionalMetrics = this.calculateAdditionalMetrics(priceStats);
     
     // Create the enhanced statistics object
     return {
@@ -427,7 +428,6 @@ Example response format:
   /**
    * Calculate additional item metrics based on statistical data
    * @param priceStats Statistical data about the item
-   * @param targetValue The target item value
    * @returns Object containing the three additional metrics
    */
   private calculateAdditionalMetrics(
@@ -436,8 +436,7 @@ Example response format:
       percentile: number;
       priceTrend: number;
       coefficientOfVariation: number;
-    },
-    targetValue: number
+    }
   ): {
     historical_significance: number;
     investment_potential: number;
@@ -617,14 +616,16 @@ Example response format:
         const averagePrice = Math.round(sum / yearData.prices.length);
         return {
           year: yearData.year,
-          price: averagePrice
+          price: averagePrice,
+          index: undefined // Initialize with undefined, will be set later
         };
       });
       
       // If we don't have at least the past few years, generate a more complete history
       const currentYear = new Date().getFullYear();
-      const earliestYear = Math.min(...priceHistory.map(item => parseInt(item.year)));
-      const latestYear = Math.max(...priceHistory.map(item => parseInt(item.year)));
+      // Calculate min/max years from the data (earliestYear not used directly)
+      const years = priceHistory.map(item => parseInt(item.year));
+      const latestYear = Math.max(...years);
       
       // If we're missing recent years, add them with projected values
       if (latestYear < currentYear) {
@@ -640,7 +641,8 @@ Example response format:
           const projectedPrice = Math.round(prevYearPrice * (1 + annualGrowth));
           priceHistory.push({
             year: year.toString(),
-            price: projectedPrice
+            price: projectedPrice,
+            index: undefined
           });
         }
       }
@@ -673,12 +675,12 @@ Example response format:
           const annualGrowth = yearSpan > 0 ? Math.pow(firstPrice / lastPrice, 1 / yearSpan) : 0.95;
           const growthFactor = annualGrowth;
           const extrapolatedPrice = Math.round(priceHistory[0].price * Math.pow(growthFactor, i));
-          const extrapolatedIndex = Math.round(priceHistory[0].index! * Math.pow(growthFactor, i));
+          const pointIndex = Math.round((priceHistory[0].index || 1000) * Math.pow(growthFactor, i));
           
           extrapolated.push({
             year: yearToAdd,
             price: extrapolatedPrice,
-            index: extrapolatedIndex
+            index: pointIndex
           });
         }
         

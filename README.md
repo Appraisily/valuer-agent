@@ -21,6 +21,7 @@ An intelligent service that provides detailed justifications for antique and col
 - 🔎 Valuable auction results discovery from keywords
 - 🔐 Secure API key management
 - 🧪 Comprehensive test suite
+- 📊 Enhanced statistics for visual market analytics
 
 ## Project Structure
 
@@ -30,9 +31,10 @@ src/
 ├── services/
 │   ├── justifier-agent.ts   # Main AI valuation logic
 │   ├── market-data.ts       # Market data processing
-│   ├── valuer.ts           # Valuer API integration
-│   ├── types.ts            # Shared TypeScript interfaces
-│   ├── prompts/            # AI prompt templates
+│   ├── statistics-service.ts # Enhanced statistics generation
+│   ├── valuer.ts            # Valuer API integration
+│   ├── types.ts             # Shared TypeScript interfaces
+│   ├── prompts/             # AI prompt templates
 │   │   └── index.ts
 │   └── utils/
 │       └── tokenizer.ts     # Token management utilities
@@ -165,6 +167,64 @@ Response:
 }
 ```
 
+### Enhanced Statistics
+Provides comprehensive market statistics and visual data for an item.
+
+```http
+POST /api/enhanced-statistics
+Content-Type: application/json
+
+{
+  "text": "Antique Victorian mahogany dining table, circa 1860",
+  "value": 2500,
+  "limit": 20  // Optional: limits displayed results in UI, defaults to 20
+}
+```
+
+Response:
+```json
+{
+  "success": true,
+  "statistics": {
+    "count": 42,
+    "average_price": 4250,
+    "median_price": 4400,
+    "price_min": 2100,
+    "price_max": 6800,
+    "standard_deviation": 650,
+    "coefficient_of_variation": 15.8,
+    "percentile": "68th",
+    "confidence_level": "High",
+    "price_trend_percentage": "+5.2%",
+    "histogram": [
+      {"min": 2000, "max": 3000, "count": 4, "height": 40, "position": 0, "contains_target": false},
+      {"min": 3000, "max": 4000, "count": 7, "height": 65, "position": 20, "contains_target": false},
+      {"min": 4000, "max": 5000, "count": 9, "height": 85, "position": 40, "contains_target": true},
+      {"min": 5000, "max": 6000, "count": 5, "height": 50, "position": 60, "contains_target": false},
+      {"min": 6000, "max": 7000, "count": 2, "height": 20, "position": 80, "contains_target": false}
+    ],
+    "price_history": [
+      {"year": "2018", "price": 5000, "index": 1000},
+      {"year": "2019", "price": 5200, "index": 1050},
+      {"year": "2020", "price": 5500, "index": 1100},
+      {"year": "2021", "price": 6000, "index": 1200},
+      {"year": "2022", "price": 6200, "index": 1250},
+      {"year": "2023", "price": 6800, "index": 1300}
+    ],
+    "comparable_sales": [
+      {"title": "Similar Item #1", "house": "Christie's", "date": "May 12, 2024", "price": 4800, "currency": "USD", "diff": "+6.7%"},
+      {"title": "Your Item", "house": "-", "date": "Current", "price": 4500, "currency": "USD", "diff": "-", "is_current": true},
+      {"title": "Similar Item #2", "house": "Sotheby's", "date": "Apr 3, 2024", "price": 4200, "currency": "USD", "diff": "-6.7%"}
+    ],
+    "value": 2500,
+    "target_marker_position": 50,
+    "historical_significance": 75,
+    "investment_potential": 68,
+    "provenance_strength": 72
+  }
+}
+```
+
 ## Setup
 
 1. Install dependencies:
@@ -201,6 +261,11 @@ Response:
    - Integrates with Valuer API
    - Manages market data retrieval
    - Implements price range calculations
+
+4. **StatisticsService**
+   - Generates comprehensive market statistics
+   - Creates price history analysis
+   - Calculates visual metrics for interactive charts
 
 ### Testing
 

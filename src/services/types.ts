@@ -5,6 +5,8 @@ export interface SimplifiedAuctionItem {
   house: string;
   date: string;
   description?: string;
+  diff?: string;
+  is_current?: boolean;
 }
 
 export interface MarketDataResult {
