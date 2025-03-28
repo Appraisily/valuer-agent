@@ -4,6 +4,7 @@ import OpenAI from 'openai';
 import { SecretManagerServiceClient } from '@google-cloud/secret-manager';
 import { ValuerService } from './services/valuer.js';
 import { JustifierAgent } from './services/justifier-agent.js';
+import { StatisticsService } from './services/statistics-service.js';
 
 async function getOpenAIKey() {
   const client = new SecretManagerServiceClient();
@@ -23,6 +24,7 @@ app.use(express.json());
 
 let openai: OpenAI;
 let justifier: JustifierAgent;
+let statistics: StatisticsService;
 const valuer = new ValuerService();
 
 // Initialize OpenAI client with secret
@@ -30,6 +32,7 @@ async function initializeOpenAI() {
   const apiKey = await getOpenAIKey();
   openai = new OpenAI({ apiKey });
   justifier = new JustifierAgent(openai, valuer);
+  statistics = new StatisticsService(openai, valuer);
 }
 
 const RequestSchema = z.object({
@@ -45,6 +48,12 @@ const FindValueRequestSchema = z.object({
 const AuctionResultsRequestSchema = z.object({
   keyword: z.string(),
   minPrice: z.number().optional(),
+  limit: z.number().optional(),
+});
+
+const EnhancedStatisticsRequestSchema = z.object({
+  text: z.string(),
+  value: z.number(),
   limit: z.number().optional(),
 });
 
@@ -238,6 +247,46 @@ app.post('/api/wp2hugo-auction-results', async (req, res) => {
       error: error instanceof Error ? error.message : 'Unknown error',
       auctionResults: [],
       timestamp: new Date().toISOString()
+    });
+  }
+});
+
+/**
+ * Enhanced Statistics API
+ * Provides comprehensive market statistics for an item, optimized for visualization
+ */
+app.post('/api/enhanced-statistics', async (req, res) => {
+  try {
+    if (!openai || !statistics) {
+      throw new Error('OpenAI client or statistics service not initialized');
+    }
+
+    const { text, value, limit = 20 } = EnhancedStatisticsRequestSchema.parse(req.body);
+    console.log(`Enhanced statistics request for: "${text}" with value ${value}`);
+    
+    // Generate comprehensive statistics using the dedicated service
+    const enhancedStats = await statistics.generateStatistics(text, value);
+    
+    // If a limit is specified, trim the comparable sales to that limit
+    if (limit > 0 && limit < enhancedStats.comparable_sales.length) {
+      const originalCount = enhancedStats.comparable_sales.length;
+      enhancedStats.comparable_sales = enhancedStats.comparable_sales.slice(0, limit);
+      enhancedStats.total_count = originalCount;
+      console.log(`Limited comparable sales from ${originalCount} to ${limit} for UI display`);
+    }
+    
+    // Return the complete statistics object
+    res.json({
+      success: true,
+      statistics: enhancedStats,
+      message: 'Enhanced statistics generated successfully'
+    });
+  } catch (error) {
+    console.error('Error generating enhanced statistics:', error);
+    res.status(400).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error',
+      message: 'Failed to generate enhanced statistics'
     });
   }
 });
