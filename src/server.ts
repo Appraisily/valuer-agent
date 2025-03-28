@@ -166,6 +166,82 @@ app.post('/api/auction-results', async (req, res) => {
   }
 });
 
+/**
+ * Special endpoint designed specifically for the WP2HUGO process:direct:10 workflow
+ * This endpoint matches the expected format from the auction-results.service.js
+ */
+app.post('/api/wp2hugo-auction-results', async (req, res) => {
+  try {
+    const { keyword, minPrice = 1000, limit = 10 } = AuctionResultsRequestSchema.parse(req.body);
+    
+    console.log(`WP2HUGO auction results request for: "${keyword}" (minPrice: ${minPrice}, limit: ${limit})`);
+    
+    const results = await valuer.findValuableResults(keyword, minPrice, limit);
+    
+    // Calculate price range and median for summary
+    const prices = results.hits.map(hit => hit.priceResult).filter(p => p > 0);
+    const minFoundPrice = prices.length > 0 ? Math.min(...prices) : 0;
+    const maxFoundPrice = prices.length > 0 ? Math.max(...prices) : 0;
+    
+    // Find median price
+    let medianPrice = 0;
+    if (prices.length > 0) {
+      const sortedPrices = [...prices].sort((a, b) => a - b);
+      const midIndex = Math.floor(sortedPrices.length / 2);
+      medianPrice = sortedPrices.length % 2 === 0
+        ? (sortedPrices[midIndex - 1] + sortedPrices[midIndex]) / 2
+        : sortedPrices[midIndex];
+    }
+    
+    // Map results to the format expected by the WP2HUGO service
+    const auctionResults = results.hits.map(hit => ({
+      title: hit.lotTitle,
+      price: {
+        amount: hit.priceResult,
+        currency: hit.currencyCode,
+        symbol: hit.currencySymbol
+      },
+      house: hit.houseName,  // Using the expected field name 'house' instead of 'auctionHouse'
+      date: hit.dateTimeLocal,
+      lotNumber: hit.lotNumber,
+      saleType: hit.saleType
+    }));
+    
+    // Generate a market summary based on the results
+    let summary = "";
+    if (auctionResults.length > 0) {
+      summary = `Based on ${auctionResults.length} recent auction results, ${keyword} typically sell for between ${minFoundPrice} and ${maxFoundPrice} ${results.hits[0]?.currencyCode || 'USD'}, with a median value of approximately ${Math.round(medianPrice)} ${results.hits[0]?.currencyCode || 'USD'}. Prices can vary significantly based on condition, rarity, provenance, and market demand.`;
+    } else {
+      summary = `Limited auction data is available for ${keyword}. Values may vary significantly based on condition, rarity, provenance, and market demand.`;
+    }
+    
+    // Return the response in the format expected by auction-results.service.js
+    res.json({
+      success: true,
+      keyword,
+      totalResults: auctionResults.length,
+      minPrice: minPrice,
+      auctionResults,
+      summary,
+      priceRange: {
+        min: minFoundPrice,
+        max: maxFoundPrice,
+        median: medianPrice
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Error fetching WP2HUGO auction results:', error);
+    res.status(400).json({
+      success: false,
+      keyword: req.body?.keyword || '',
+      error: error instanceof Error ? error.message : 'Unknown error',
+      auctionResults: [],
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
 const port = process.env.PORT || 8080;
 
 // Initialize OpenAI before starting server
