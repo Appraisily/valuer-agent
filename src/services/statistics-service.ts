@@ -138,9 +138,16 @@ Example response format for "Antique Meissen Porcelain Tea Set with Floral Desig
   private async gatherAuctionData(
     text: string, 
     value: number, 
-    targetCount: number = 100
+    targetCount: number = 100,
+    minPrice?: number,
+    maxPrice?: number
   ): Promise<SimplifiedAuctionItem[]> {
     console.log(`Gathering comprehensive auction data for statistics (target: ${targetCount} items)`);
+    
+    // Use explicit price range if provided, otherwise use default percentage range
+    const effectiveMinPrice = minPrice || Math.floor(value * 0.6);
+    const effectiveMaxPrice = maxPrice || Math.ceil(value * 1.6);
+    console.log(`Using price range for search: $${effectiveMinPrice} - $${effectiveMaxPrice}`);
     
     // Extract optimal search keywords with multiple specificity levels
     const searchTerms = await this.extractKeywords(text);
@@ -174,7 +181,9 @@ Example response format for "Antique Meissen Porcelain Tea Set with Floral Desig
         value,              // Target value for reference
         false,              // Not for justification
         relevanceThreshold, // Adjust relevance threshold based on specificity level
-        remainingNeeded     // Limit search to only what we still need
+        remainingNeeded,    // Limit search to only what we still need
+        effectiveMinPrice,  // Minimum price for filtering results
+        effectiveMaxPrice   // Maximum price for filtering results
       );
       
       console.log(`${level} search results:`);
@@ -888,14 +897,17 @@ Example response format for "Antique Meissen Porcelain Tea Set with Floral Desig
   async generateStatistics(
     text: string, 
     value: number, 
-    targetCount: number = 100
+    targetCount: number = 100,
+    minPrice?: number,
+    maxPrice?: number
   ): Promise<EnhancedStatistics> {
     console.log(`Generating enhanced statistics for "${text}" with value ${value}`);
     console.log(`Target auction data count: ${targetCount} items`);
+    console.log(`Price range: ${minPrice ? '$' + minPrice : 'auto'} - ${maxPrice ? '$' + maxPrice : 'auto'}`);
     
     // Gather comprehensive auction data using improved progressive search strategy
     const startTime = Date.now();
-    const auctionData = await this.gatherAuctionData(text, value, targetCount);
+    const auctionData = await this.gatherAuctionData(text, value, targetCount, minPrice, maxPrice);
     const searchTime = (Date.now() - startTime) / 1000;
     
     console.log(`Found ${auctionData.length} auction items in ${searchTime.toFixed(1)} seconds`);

@@ -56,6 +56,8 @@ const EnhancedStatisticsRequestSchema = z.object({
   value: z.number(),
   limit: z.number().optional(),
   targetCount: z.number().optional(),
+  minPrice: z.number().optional(),
+  maxPrice: z.number().optional(),
 });
 
 app.post('/api/justify', async (req, res) => {
@@ -262,12 +264,12 @@ app.post('/api/enhanced-statistics', async (req, res) => {
       throw new Error('OpenAI client or statistics service not initialized');
     }
 
-    const { text, value, limit = 20, targetCount = 100 } = EnhancedStatisticsRequestSchema.parse(req.body);
-    console.log(`Enhanced statistics request for: "${text}" with value ${value} (target count: ${targetCount})`);
+    const { text, value, limit = 20, targetCount = 100, minPrice, maxPrice } = EnhancedStatisticsRequestSchema.parse(req.body);
+    console.log(`Enhanced statistics request for: "${text}" with value ${value} (target count: ${targetCount}, price range: ${minPrice || 'auto'}-${maxPrice || 'auto'})`);
     
     // Generate comprehensive statistics using the dedicated service
     // Pass the targetCount parameter to control how many auction items to gather
-    const enhancedStats = await statistics.generateStatistics(text, value, targetCount);
+    const enhancedStats = await statistics.generateStatistics(text, value, targetCount, minPrice, maxPrice);
     
     // If a limit is specified, trim the comparable sales to that limit
     if (limit > 0 && limit < enhancedStats.comparable_sales.length) {

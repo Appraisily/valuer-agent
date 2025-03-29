@@ -79,28 +79,43 @@ export class MarketDataService {
     targetValue?: number,
     isJustify: boolean = false,
     minRelevanceScore: number = 0.5,
-    maxResultsNeeded?: number
+    maxResultsNeeded?: number,
+    explicitMinPrice?: number,
+    explicitMaxPrice?: number
   ): Promise<MarketDataResult[]> {
     const allResults: MarketDataResult[] = [];
     let minPrice: number | undefined;
     let maxPrice: number | undefined;
     let totalItemsFound = 0;
 
-    if (isJustify && targetValue) {
+    // If explicit price range is provided, use it
+    if (explicitMinPrice !== undefined) {
+      minPrice = explicitMinPrice;
+    } else if (isJustify && targetValue) {
       // For justify endpoint, use 70%-130% range of target value
       minPrice = Math.floor(targetValue * 0.7);
-      maxPrice = Math.ceil(targetValue * 1.3);
     } else if (!isJustify) {
       // For find-value and find-value-range endpoints, use minimum threshold
       minPrice = 250;
+    }
+    
+    // If explicit max price is provided, use it
+    if (explicitMaxPrice !== undefined) {
+      maxPrice = explicitMaxPrice;
+    } else if (isJustify && targetValue) {
+      // For justify endpoint, use 70%-130% range of target value if not already set
+      maxPrice = Math.ceil(targetValue * 1.3);
     }
 
     console.log('\n=== Starting Market Data Search ===\n');
     console.log('Search terms:', JSON.stringify(searchTerms, null, 2));
     console.log('Minimum relevance score:', minRelevanceScore);
     console.log('Max results needed:', maxResultsNeeded || 'unlimited');
-    if (isJustify) {
-      console.log('Justify mode - searching with price range:', { minPrice, maxPrice });
+    console.log('Searching with price range:', { minPrice, maxPrice });
+    if (explicitMinPrice !== undefined || explicitMaxPrice !== undefined) {
+      console.log('Using explicit price range provided by caller');
+    } else if (isJustify) {
+      console.log('Using justify mode price range (70%-130% of target value)');
     }
     
     // Sort search terms by specificity (number of words)
