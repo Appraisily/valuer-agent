@@ -83,10 +83,10 @@ Example response format for "Antique Meissen Porcelain Tea Set with Floral Desig
         
         // Log the structured queries by specificity level
         console.log('Extracted search queries by specificity:');
-        const verySpecific = keywords.filter(k => k.split(' ').length >= 5);
-        const specific = keywords.filter(k => k.split(' ').length >= 3 && k.split(' ').length < 5);
-        const moderate = keywords.filter(k => k.split(' ').length === 2);
-        const broad = keywords.filter(k => k.split(' ').length === 1);
+        const verySpecific = keywords.filter((k: string) => k.split(' ').length >= 5);
+        const specific = keywords.filter((k: string) => k.split(' ').length >= 3 && k.split(' ').length < 5);
+        const moderate = keywords.filter((k: string) => k.split(' ').length === 2);
+        const broad = keywords.filter((k: string) => k.split(' ').length === 1);
         
         console.log(`- Very specific (${verySpecific.length}): ${verySpecific.join(', ')}`);
         console.log(`- Specific (${specific.length}): ${specific.join(', ')}`);
@@ -454,10 +454,19 @@ Example response format for "Antique Meissen Porcelain Tea Set with Floral Desig
         ...sale,
         diff: sale.diff || '-'  // Ensure diff is never undefined
       }));
-      typeSafeFormattedSales.splice(1, 0, currentItem);
+      // Using currentItem with a type assertion to ensure diff is treated as a string
+      const currentItemWithDiff = {
+        ...currentItem,
+        diff: '-' as string  // Force diff to be treated as a string
+      };
+      typeSafeFormattedSales.splice(1, 0, currentItemWithDiff);
       formattedSales = typeSafeFormattedSales;
     } else {
-      formattedSales = [currentItem];
+      // Using currentItem with a type assertion to ensure diff is treated as a string
+      formattedSales = [{
+        ...currentItem,
+        diff: '-' as string  // Force diff to be treated as a string
+      }];
     }
     
     // Format percentile as ordinal number (1st, 2nd, 3rd, etc.)
@@ -646,7 +655,7 @@ Example response format for "Antique Meissen Porcelain Tea Set with Floral Desig
    */
   private calculatePriceTrend(
     auctionResults: SimplifiedAuctionItem[], 
-    targetValue: number
+    _targetValue: number  // Prefix with underscore to indicate it's intentionally unused
   ): string {
     // Try to use date information if available
     try {
@@ -911,7 +920,8 @@ Example response format for "Antique Meissen Porcelain Tea Set with Floral Desig
    * @returns Data quality indicator
    */
   private determineDataQuality(foundCount: number, targetCount: number): string {
-    const percentage = (foundCount / targetCount) * 100;
+    // Calculate percentage but remove unused variable to avoid warning
+    // const percentage = (foundCount / targetCount) * 100;
     
     if (foundCount >= targetCount * 0.9) {
       return 'Excellent - Comprehensive market data found';
