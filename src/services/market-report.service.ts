@@ -363,7 +363,7 @@ export class MarketReportService {
             date: 'Current',
             price: targetValue,
             currency: formattedSales[0]?.currency || 'USD', // Use currency from others or default
-            diff: '-', 
+            diff: '-', // Ensure diff is always a string
             is_current: true
         };
 

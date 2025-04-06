@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "build": "rm -rf dist && tsc --project tsconfig.node.json",
+    "build": "npx rimraf dist && npx tsc --project tsconfig.node.json",
     "start": "node dist/server.js",
     "lint": "eslint .",
     "test": "vitest"

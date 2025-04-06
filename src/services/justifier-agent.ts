@@ -1,4 +1,4 @@
-import OpenAI from 'openai';
+import { Configuration, OpenAIApi, CreateChatCompletionRequest } from 'openai';
 import { ValuerService } from './valuer.js';
 import { MarketDataService } from './market-data.js';
 import { ValueResponse, ValueRangeResponse, JustifyResponse, MarketDataResult, AuctionItemWithRelevance } from './types.js';
@@ -7,10 +7,6 @@ import { createAccurateValueRangePrompt, createKeywordExtractionPrompt } from '.
 import { callOpenAI, callOpenAIAndParseJson } from './utils/openai-helper.js';
 
 // Define interfaces for the expected JSON structures from AI calls
-interface SearchStrategyResponse {
-  queries: string[];
-}
-
 interface KeywordExtractionResponse {
   primaryKeywords: string[];
   secondaryKeywords: string[];

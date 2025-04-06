@@ -1,8 +1,8 @@
 import { 
   SimplifiedAuctionItem, 
-  EnhancedStatistics, 
-  HistogramBucket,
-  PriceHistoryPoint
+  EnhancedStatistics,
+  // Removed: HistogramBucket,
+  // Removed: PriceHistoryPoint
 } from './types.js';
 import { MarketDataService } from './market-data.js';
 import { ValuerService } from './valuer.js';
@@ -10,12 +10,13 @@ import OpenAI from 'openai';
 
 // Import the refactored services
 import { KeywordExtractionService } from './keyword-extraction.service.js';
-import { MarketDataAggregatorService, QueryGroups } from './market-data-aggregator.service.js';
-import { StatisticalAnalysisService, CoreStatistics, AdditionalMetrics } from './statistical-analysis.service.js';
+// Removed: QueryGroups
+import { MarketDataAggregatorService } from './market-data-aggregator.service.js';
+// Removed: CoreStatistics, AdditionalMetrics
+import { StatisticalAnalysisService } from './statistical-analysis.service.js';
 import { MarketReportService } from './market-report.service.js';
 
-// Minimum items required for full statistical analysis (consistent with StatisticalAnalysisService logic)
-const MIN_ITEMS_FOR_FULL_STATS = 3; 
+// Removed unused const: MIN_ITEMS_FOR_FULL_STATS
 
 export class StatisticsService {
   private marketDataService: MarketDataService;

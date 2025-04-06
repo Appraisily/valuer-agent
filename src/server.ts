@@ -61,7 +61,7 @@ const EnhancedStatisticsRequestSchema = z.object({
 });
 
 // Middleware to check if essential services are initialized
-const checkServicesInitialized = (req: Request, res: Response, next: NextFunction) => {
+const checkServicesInitialized = (_req: Request, _res: Response, next: NextFunction) => {
   if (!openai || !justifier || !statistics) {
     // Use next(error) to pass control to the error handling middleware
     return next(new Error('Core services not initialized'));
@@ -253,7 +253,7 @@ app.post('/api/enhanced-statistics', asyncHandler(async (req, res) => {
 
 
 // Error Handling Middleware - Must be the last middleware added
-app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
+app.use((err: Error, req: Request, res: Response, _next: NextFunction) => {
   console.error(`Error processing request ${req.method} ${req.path}:`, err);
 
   // Handle Zod validation errors specifically

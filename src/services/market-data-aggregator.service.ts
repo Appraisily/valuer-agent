@@ -1,5 +1,5 @@
-import { MarketDataService, MarketDataResult } from './market-data.js';
-import { SimplifiedAuctionItem } from './types.js';
+import { MarketDataService } from './market-data.js';
+import { SimplifiedAuctionItem, MarketDataResult } from './types.js';
 
 // Type for query groups used in progressive search
 export type QueryGroups = Record<string, string[]>;

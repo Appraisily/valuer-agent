@@ -1,11 +1,6 @@
 import OpenAI from 'openai';
 import { callOpenAIAndParseJson } from './utils/openai-helper.js';
-
-// Interface for the expected response structure from the keyword extraction prompt
-interface KeywordResponse {
-  // Assuming the prompt asks for a flat array of strings
-  keywords: string[];
-}
+import { createChatCompletion } from './openai-util.js';
 
 export class KeywordExtractionService {
   constructor(private openai: OpenAI) {}
