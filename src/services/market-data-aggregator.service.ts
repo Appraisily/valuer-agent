@@ -1,21 +1,25 @@
-import { MarketDataService } from './market-data.js';
+import { MarketDataService, MarketDataResult } from './market-data.js';
 import { SimplifiedAuctionItem } from './types.js';
 
 // Type for query groups used in progressive search
 export type QueryGroups = Record<string, string[]>;
+
+const MAX_SEARCH_LEVELS = 5; // Maximum progressive search levels
+const MIN_RELEVANT_ITEMS = 5; // Minimum items to stop searching early
+const TARGET_COUNT_FALLBACK_MULTIPLIER = 2; // Factor to multiply targetCount for broad search if needed
 
 export class MarketDataAggregatorService {
 
   constructor(private marketDataService: MarketDataService) {}
 
   /**
-   * Gathers comprehensive auction data using a progressive search strategy based on keyword specificity.
-   * @param queryGroups - Keywords grouped by specificity (e.g., 'very specific', 'specific').
-   * @param targetValue - The target value for relevance sorting and potential filtering.
-   * @param targetCount - The desired number of auction items to gather.
+   * Gathers auction data prioritizing relevance over strict target count, with a limited number of search attempts.
+   * @param queryGroups - Keywords grouped by specificity.
+   * @param targetValue - The target value for relevance sorting.
+   * @param targetCount - The *initial* desired number of items (influences early search attempts).
    * @param minPrice - Optional minimum price filter.
    * @param maxPrice - Optional maximum price filter.
-   * @returns Array of unique, simplified auction items, sorted by relevance to target value.
+   * @returns Array of unique, simplified auction items, sorted by relevance (price proximity).
    */
   async gatherAuctionDataProgressively(
     queryGroups: QueryGroups,
@@ -24,148 +28,253 @@ export class MarketDataAggregatorService {
     minPrice?: number,
     maxPrice?: number
   ): Promise<SimplifiedAuctionItem[]> {
-    console.log(`Gathering comprehensive auction data (target: ${targetCount} items)`);
+    console.log(`Gathering auction data (initial target: ${targetCount}, min items: ${MIN_RELEVANT_ITEMS}, max levels: ${MAX_SEARCH_LEVELS})`);
 
-    // Use explicit price range if provided, otherwise calculate based on value
     const effectiveMinPrice = minPrice ?? Math.floor(targetValue * 0.6);
     const effectiveMaxPrice = maxPrice ?? Math.ceil(targetValue * 1.6);
     console.log(`Using price range for search: $${effectiveMinPrice} - $${effectiveMaxPrice}`);
 
     const allItems: SimplifiedAuctionItem[] = [];
-    const seenItemKeys = new Set<string>(); // Use a more robust key
-    let totalResultsFound = 0;
-    const searchOrder = ['very specific', 'specific', 'moderate', 'broad']; // Define search order
+    const seenItemKeys = new Set<string>();
+    let currentLevel = 0;
+    // Define search order - ensure it has levels for MAX_SEARCH_LEVELS + potential broad level
+    const searchOrder = ['very specific', 'specific', 'moderate', 'broad', 'very broad']; // Added 'very broad' for clarity
 
     console.log('Starting progressive search strategy');
 
     for (const level of searchOrder) {
-      const queries = queryGroups[level];
-      if (!queries || queries.length === 0 || totalResultsFound >= targetCount) {
-        if (totalResultsFound >= targetCount) {
-            console.log(`Target count ${targetCount} reached. Skipping remaining levels.`);
-        } else {
-             console.log(`Skipping level "${level}" due to no queries or target already met.`);
+        currentLevel++;
+        if (currentLevel > MAX_SEARCH_LEVELS) {
+            console.log(`Reached max search levels (${MAX_SEARCH_LEVELS}).`);
+            break;
         }
-        continue;
-      }
 
-      console.log(`\nSearching level "${level}" (${queries.length} terms) - currently have ${totalResultsFound} items`);
+        const queries = queryGroups[level];
+        if (!queries || queries.length === 0) {
+            console.log(`Skipping level ${currentLevel} ("${level}") due to no queries.`);
+            continue;
+        }
 
-      const remainingNeeded = targetCount - totalResultsFound;
-      const relevanceThreshold = this.getRelevanceThresholdForLevel(level);
+        console.log(`\n--- Level ${currentLevel} ("${level}"): Searching ${queries.length} terms (Current items: ${allItems.length}) ---`);
 
-      // Fetch data for the current level
-      const levelResults = await this.marketDataService.searchMarketData(
-        queries,
-        targetValue,          // Target value for reference
-        false,                // Not for justification
-        relevanceThreshold,   // Relevance threshold for this level
-        remainingNeeded,      // Limit API results if possible (or handle client-side)
-        effectiveMinPrice,
-        effectiveMaxPrice
-      );
+        // Adjust remaining needed based on progress, but ensure we ask for a reasonable amount initially
+        // Ask for at least double the min needed or half the target
+        const remainingNeeded = Math.max(targetCount * 0.5, MIN_RELEVANT_ITEMS * 2) - allItems.length;
+        const relevanceThreshold = this.getRelevanceThresholdForLevel(level);
 
-      console.log(`${level} search raw results:`);
-      levelResults.forEach(result => {
-        console.log(`- "${result.query}": ${result.data.length} items (relevance: ${result.relevance || 'N/A'})`);
-      });
+        // Fetch data for the current level
+        const levelResults = await this.fetchAndProcessLevel(
+            queries,
+            targetValue,
+            relevanceThreshold,
+            Math.max(10, remainingNeeded), // Ask API for at least 10, or remainingNeeded
+            effectiveMinPrice,
+            effectiveMaxPrice
+        );
 
-      // Process and deduplicate results from this level
-      let newItemsFromLevelCount = 0;
-      const relevanceOrder = ['very high', 'high', 'medium', 'broad']; // Process in order of relevance
-      
-      for (const relevance of relevanceOrder) {
-          const relevantGroup = levelResults.filter(r => r.relevance === relevance);
-          for (const result of relevantGroup) {
-              for (const item of result.data) {
-                // Create a unique key based on title, house, date, and price
-                const itemKey = `${item.title}|${item.house}|${item.date}|${item.price}`;
-                if (!seenItemKeys.has(itemKey)) {
-                    allItems.push(item);
-                    seenItemKeys.add(itemKey);
-                    newItemsFromLevelCount++;
-                    if (allItems.length >= targetCount) break; // Stop if target reached
-                }
-              }
-              if (allItems.length >= targetCount) break;
-          }
-          if (allItems.length >= targetCount) break;
-      }
-      
+        // Process and deduplicate results from this level
+        const newItemsCount = this.addUniqueItems(levelResults, allItems, seenItemKeys);
+        console.log(`Level ${currentLevel} ("${level}"): Found ${newItemsCount} new unique items. Total unique items: ${allItems.length}`);
 
-      totalResultsFound = allItems.length;
-      console.log(`Found ${newItemsFromLevelCount} new unique items from level "${level}"`);
-      console.log(`Total unique items so far: ${totalResultsFound}`);
+        // Check for early exit condition
+        if (allItems.length >= MIN_RELEVANT_ITEMS) {
+            console.log(`Minimum relevant items (${MIN_RELEVANT_ITEMS}) threshold reached at level ${currentLevel}. Stopping progressive search.`);
+            break; // Exit loop if we have enough relevant items
+        }
+    } // End of progressive search loop
 
-      // Optional: Early exit condition if enough good data found
-      const significantThreshold = level === 'very specific' ? 5 : 10;
-      if (newItemsFromLevelCount >= significantThreshold && totalResultsFound >= targetCount * 0.8) {
-        console.log(`Found significant items at level "${level}", terminating search early.`);
-        break;
-      }
+    // --- Final Broad Search (if needed) ---
+    if (allItems.length < MIN_RELEVANT_ITEMS) {
+        console.log(`\n--- Final Attempt: Minimum items (${MIN_RELEVANT_ITEMS}) not met. Performing broader search. ---`);
+        // Use 'broad' and 'very broad' queries, or derive if necessary
+        let finalQueries = queryGroups['broad'] || [];
+        if (queryGroups['very broad']) {
+             finalQueries = [...new Set([...finalQueries, ...queryGroups['very broad']])];
+        }
+        // Fallback: if still no queries, try deriving from specific/moderate
+         if (finalQueries.length === 0) {
+            const specific = queryGroups['specific'] || [];
+            const moderate = queryGroups['moderate'] || [];
+            const potential = [...specific, ...moderate].map(q => q.split(' ').slice(0, 2).join(' ')).filter(q => q);
+            finalQueries = [...new Set(potential)];
+             console.log("Deriving final broad queries:", finalQueries);
+         }
+
+
+        if (finalQueries.length > 0) {
+            const finalResults = await this.fetchAndProcessLevel(
+                finalQueries,
+                targetValue,
+                0.1, // Lowest relevance threshold
+                targetCount * TARGET_COUNT_FALLBACK_MULTIPLIER, // Ask for more items in the broad search
+                effectiveMinPrice * 0.5, // Broaden price range slightly
+                effectiveMaxPrice * 1.5
+            );
+             const finalNewCount = this.addUniqueItems(finalResults, allItems, seenItemKeys);
+             console.log(`Final Attempt: Added ${finalNewCount} more items. Total unique items: ${allItems.length}`);
+        } else {
+            console.log("Final Attempt: No broad queries available to run.");
+        }
     }
 
-    console.log(`\nSearch complete - total unique auction items gathered: ${allItems.length}`);
+    console.log(`\n--- Search Complete ---`);
+    console.log(`Total unique auction items gathered: ${allItems.length}`);
     this.logPriceSummary(allItems);
 
-    // Final sort by relevance to target value (closest price first)
-    return allItems.sort((a, b) => {
+    // Final sort by relevance (price proximity) regardless of how many items were found
+    allItems.sort((a, b) => {
       const diffA = Math.abs(a.price - targetValue);
       const diffB = Math.abs(b.price - targetValue);
       return diffA - diffB;
     });
+
+    // Add relevance score based on final sorted position (optional)
+    // allItems.forEach((item, index) => {
+    //     item.relevanceScore = 1 - (index / allItems.length); // Simple linear score
+    // });
+
+    return allItems; // Return all gathered and sorted items
   }
 
+   /** Helper function to fetch and log results for a level */
+   private async fetchAndProcessLevel(
+       queries: string[],
+       targetValue: number,
+       relevanceThreshold: number,
+       maxResultsNeeded: number,
+       minPrice?: number,
+       maxPrice?: number
+   ): Promise<MarketDataResult[]> {
+        const levelResults = await this.marketDataService.searchMarketData(
+            queries,
+            targetValue,
+            false, // Not for justification
+            relevanceThreshold,
+            Math.max(10, Math.ceil(maxResultsNeeded)), // Ensure maxResultsNeeded is an int >= 10
+            minPrice,
+            maxPrice
+        );
+
+        console.log(`  Raw results for this level:`);
+        levelResults.forEach(result => {
+            console.log(`  - "${result.query}": ${result.data.length} items (relevance: ${result.relevance || 'N/A'})`);
+        });
+        return levelResults;
+   }
+
+   /** Helper function to add unique items to the main list */
+    private addUniqueItems(
+        levelResults: MarketDataResult[],
+        allItems: SimplifiedAuctionItem[],
+        seenItemKeys: Set<string>
+    ): number {
+        let newItemsCount = 0;
+        const relevanceOrder = ['very high', 'high', 'medium', 'broad']; // Process in order of specified relevance if available
+
+        for (const relevance of relevanceOrder) {
+            const relevantGroup = levelResults.filter(r => r.relevance === relevance);
+            for (const result of relevantGroup) {
+                for (const item of result.data) {
+                    // Create a unique key
+                    const itemKey = `${item.title}|${item.house}|${item.date}|${item.price}`;
+                    if (!seenItemKeys.has(itemKey)) {
+                        allItems.push(item);
+                        seenItemKeys.add(itemKey);
+                        newItemsCount++;
+                    }
+                }
+            }
+        }
+         // Add items with no specific relevance score last
+         const otherResults = levelResults.filter(r => !r.relevance || !relevanceOrder.includes(r.relevance));
+         for (const result of otherResults) {
+             for (const item of result.data) {
+                 const itemKey = `${item.title}|${item.house}|${item.date}|${item.price}`;
+                 if (!seenItemKeys.has(itemKey)) {
+                     allItems.push(item);
+                     seenItemKeys.add(itemKey);
+                     newItemsCount++;
+                 }
+             }
+         }
+        return newItemsCount;
+    }
+
+
   /**
-   * Groups search queries by specificity level based on word count.
-   * Ensures each level has at least some queries, using fallbacks if necessary.
-   * @param queries - Flat array of search queries.
-   * @returns Object with queries grouped by specificity level.
+   * Groups search queries by specificity level.
+   * Ensures levels potentially used in broad search exist.
    */
   groupQueriesBySpecificity(queries: string[]): QueryGroups {
       if (!queries || queries.length === 0) {
           console.warn("Received empty query list for grouping.");
-          return { 'very specific': [], 'specific': [], 'moderate': [], 'broad': [] };
+          return { 'very specific': [], 'specific': [], 'moderate': [], 'broad': [], 'very broad': [] };
       }
-      
+
       const groups: QueryGroups = {
         'very specific': queries.filter(q => q.split(' ').length >= 5),
         'specific': queries.filter(q => q.split(' ').length >= 3 && q.split(' ').length < 5),
         'moderate': queries.filter(q => q.split(' ').length === 2),
-        'broad': queries.filter(q => q.split(' ').length === 1)
+        'broad': queries.filter(q => q.split(' ').length === 1),
+        'very broad': [] // Initially empty, populated by fallback
       };
-      
-      // Simple fallback: Ensure 'very specific' and 'specific' have the first query if empty
-      if (groups['very specific'].length === 0) groups['very specific'].push(queries[0]);
-      if (groups['specific'].length === 0) groups['specific'].push(queries[0]);
-      
-      // Fallback for moderate/broad: derive from more specific queries if empty
+
+      // --- Fallback Logic ---      
+      const allSourceQueries = queries.join(' ').split(' ').filter(w => w.length > 1); // Get all words
+
+      // Simple fallback: Ensure 'very specific' and 'specific' have the most specific query if empty
+      if (groups['very specific'].length === 0 && queries[0]) groups['very specific'].push(queries[0]);
+      if (groups['specific'].length === 0 && groups['very specific'].length > 0) {
+          // Try deriving from 'very specific' first
+           groups['specific'] = [...new Set(groups['very specific'].map(q => q.split(' ').slice(0, 4).join(' ')).filter(q => q && q.split(' ').length >=3))];
+           if (groups['specific'].length === 0 && queries[0]) groups['specific'].push(queries[0]); // Use original if derivation fails
+      } else if (groups['specific'].length === 0 && queries[0]) {
+           groups['specific'].push(queries[0]); // Use original if 'very specific' was also empty
+      }
+
+      // Fallback for moderate: derive from 'specific'
       if (groups['moderate'].length === 0 && groups['specific'].length > 0) {
-          groups['moderate'] = [...new Set(groups['specific'].map(q => q.split(' ').slice(0, 2).join(' ')))];
+          groups['moderate'] = [...new Set(groups['specific'].map(q => q.split(' ').slice(0, 2).join(' ')).filter(q => q && q.split(' ').length === 2))];
       }
+      // Fallback for broad: derive from 'moderate'
       if (groups['broad'].length === 0 && groups['moderate'].length > 0) {
-          groups['broad'] = [...new Set(groups['moderate'].map(q => q.split(' ')[0]))];
+          groups['broad'] = [...new Set(groups['moderate'].map(q => q.split(' ')[0]).filter(q => q && q.length > 1))];
       }
-       // Last resort for broad
-      if (groups['broad'].length === 0 && queries.length > 0) {
-           const words = queries[0].split(' ');
-           const potentialBroad = words.filter(w => w.length > 2 && !['the', 'and', 'with', 'for', 'from'].includes(w.toLowerCase()));
-           groups['broad'].push(potentialBroad.length > 0 ? potentialBroad[0] : words[0]);
-      }
+      // Fallback for 'very broad': use single words from 'broad', or from 'moderate' if 'broad' failed
+       if (groups['very broad'].length === 0) {
+           const sourceForVeryBroad = groups['broad'].length > 0 ? groups['broad'] : (groups['moderate'].length > 0 ? groups['moderate'] : groups['specific']);
+           // Use unique single words from the source level
+            groups['very broad'] = [...new Set(sourceForVeryBroad.flatMap(q => q.split(' ')).filter(w => w.length > 2 && !['the','a','an','is','at','on','in','for','of'].includes(w.toLowerCase())))]; 
+            // If still empty, use all words from original queries
+            if(groups['very broad'].length === 0) {
+                 groups['very broad'] = [...new Set(allSourceQueries.filter(w => w.length > 2))];
+            }
+       }
+
+       // Last resort for broad/very broad if everything else failed
+       if (groups['broad'].length === 0 && allSourceQueries.length > 0) {
+            groups['broad'] = [allSourceQueries[0]]; // Use the first word
+       }
+        if (groups['very broad'].length === 0 && groups['broad'].length > 0) {
+             groups['very broad'] = groups['broad']; // If broad has something but very broad doesn't, copy it
+        }
+         if (groups['very broad'].length === 0 && allSourceQueries.length > 0) { // Ultimate fallback for very broad
+              groups['very broad'] = [allSourceQueries[0]];
+         }
 
       // Ensure all levels exist, even if empty
       groups['very specific'] = groups['very specific'] || [];
       groups['specific'] = groups['specific'] || [];
       groups['moderate'] = groups['moderate'] || [];
       groups['broad'] = groups['broad'] || [];
-      
+      groups['very broad'] = groups['very broad'] || []; // Ensure it exists
+
+       console.log("Query Groups:", JSON.stringify(groups));
       return groups;
   }
 
   /**
    * Determines the relevance threshold based on the query specificity level.
-   * @param level - Specificity level string.
-   * @returns Relevance threshold number.
    */
   private getRelevanceThresholdForLevel(level: string): number {
     switch (level) {
@@ -173,13 +282,15 @@ export class MarketDataAggregatorService {
       case 'specific': return 0.5;
       case 'moderate': return 0.3;
       case 'broad': return 0.2;
+      case 'very broad': return 0.1; // Lower threshold for the broadest level
       default: return 0.3;
     }
   }
 
+  /** Logs a summary of prices for the gathered items */
   private logPriceSummary(items: SimplifiedAuctionItem[]): void {
-      if (items.length > 0) {
-        const prices = items.map(item => item.price).filter(p => p > 0);
+       if (items.length > 0) {
+        const prices = items.map(item => item.price).filter(p => typeof p === 'number' && !isNaN(p) && p > 0);
         if(prices.length > 0) {
             const stats = {
               min: Math.min(...prices),

@@ -7,6 +7,7 @@ export interface SimplifiedAuctionItem {
   description?: string;
   diff?: string;
   is_current?: boolean;
+  relevanceScore?: number;
 }
 
 export interface MarketDataResult {

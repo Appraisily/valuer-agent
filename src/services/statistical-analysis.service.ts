@@ -49,12 +49,8 @@ export class StatisticalAnalysisService {
             return null;
         }
 
-        // Limit to a maximum number of results for stable calculations
-        const maxResults = 100;
-        const resultSubset = validResults.length > maxResults
-            ? validResults.slice(0, maxResults)
-            : validResults;
-
+        // Use all valid results provided by the aggregator
+        const resultSubset = validResults; 
         console.log(`Using ${resultSubset.length} valid auction results for core statistics`);
 
         const prices = resultSubset.map(result => result.price);

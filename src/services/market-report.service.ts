@@ -1,11 +1,12 @@
 import { SimplifiedAuctionItem, HistogramBucket, PriceHistoryPoint } from './types.js';
 
+const MIN_ITEMS_FOR_GOOD_QUALITY = 5;
+
 export class MarketReportService {
 
     /**
-     * Calculates the year-over-year price trend based on auction data.
-     * Uses date information if available and sufficient, otherwise falls back to min/max.
-     * @param auctionResults - Array of simplified auction items.
+     * Calculates the year-over-year price trend based on the provided auction data.
+     * @param auctionResults - Array of simplified auction items (should be the consistent set used for stats).
      * @returns Formatted price trend percentage string (e.g., "+5.1%").
      */
     calculatePriceTrend(auctionResults: SimplifiedAuctionItem[]): string {
@@ -93,7 +94,7 @@ export class MarketReportService {
 
     /**
      * Generates histogram data (buckets) from sorted prices.
-     * @param sortedPrices - A sorted array of valid auction prices.
+     * @param sortedPrices - A sorted array of valid auction prices (from the consistent set).
      * @param targetValue - The target value to mark in the histogram.
      * @param bucketCount - The desired number of histogram buckets (default 5).
      * @returns Array of HistogramBucket objects.
@@ -181,9 +182,8 @@ export class MarketReportService {
     }
 
     /**
-     * Generates price history data (yearly averages and index) from auction results.
-     * Includes extrapolation/projection to ensure a fixed number of years (e.g., 6).
-     * @param auctionResults - Array of simplified auction items with dates.
+     * Generates price history data (yearly averages and index) from the provided auction results.
+     * @param auctionResults - Array of simplified auction items (the consistent set).
      * @param itemValue - The current target value (used for default history).
      * @param historyYears - The desired number of years for the history (default 6).
      * @returns Array of PriceHistoryPoint objects.
@@ -325,17 +325,17 @@ export class MarketReportService {
         return finalHistory;
     }
 
-     /**
+    /**
      * Formats comparable sales data, adding the current item and percentage differences.
-     * @param comparableSales - Array of raw comparable sales.
+     * @param comparableSales - Array of raw comparable sales (the consistent set, pre-limit).
      * @param targetValue - The value of the item being compared against.
-     * @param limit - Optional limit for the number of comparable sales to return.
-     * @returns Formatted array of comparable sales including the target item.
+     * @param limit - Optional limit for the number of comparable sales to return (applied *by the caller*).
+     * @returns Formatted array of comparable sales including the target item, sorted by price proximity.
      */
     formatComparableSales(
         comparableSales: SimplifiedAuctionItem[],
         targetValue: number,
-        limit?: number
+        // limit?: number // Limit is applied by the caller (server.ts) after getting the full formatted list
     ): SimplifiedAuctionItem[] {
          // Ensure results are sorted by relevance (price proximity)
         const sortedSales = [...comparableSales].sort((a, b) => 
@@ -343,9 +343,10 @@ export class MarketReportService {
         );
 
         // Apply limit if specified (before adding the current item)
-        const limitedSales = limit && limit > 0 ? sortedSales.slice(0, limit) : sortedSales;
+        // const limitedSales = limit && limit > 0 ? sortedSales.slice(0, limit) : sortedSales;
+        // ^^^ LIMITING IS REMOVED HERE - done by server.ts
 
-        const formattedSales = limitedSales.map(result => {
+        const formattedSales = sortedSales.map(result => { // Use sortedSales directly
             const priceDiff = targetValue > 0 ? ((result.price - targetValue) / targetValue) * 100 : 0;
             const diffFormatted = priceDiff >= 0 ? `+${priceDiff.toFixed(1)}%` : `${priceDiff.toFixed(1)}%`;
             return {
@@ -376,20 +377,17 @@ export class MarketReportService {
     }
 
     /**
-     * Determines a data quality indicator string based on the number of items found.
-     * @param foundCount - Number of auction items found.
-     * @param targetCount - Target number of items aimed for.
+     * Determines data quality based on finding a minimum number of relevant items.
+     * @param foundCount - Number of auction items found and used for analysis.
+     * @param _targetCount - Original target count (now less relevant for quality). Not used.
      * @returns Data quality indicator string.
      */
-    determineDataQuality(foundCount: number, targetCount: number): string {
-        if (targetCount <= 0) return 'N/A'; // Avoid division by zero
-        const percentage = (foundCount / targetCount) * 100;
-
+    determineDataQuality(foundCount: number, _targetCount: number): string {
+        // Quality is now primarily based on getting at least MIN_ITEMS_FOR_GOOD_QUALITY
         if (foundCount === 0) return 'Poor - No comparable market data found';
-        if (percentage >= 90) return 'Excellent - Comprehensive market data found';
-        if (percentage >= 70) return 'Good - Substantial market data found';
-        if (percentage >= 40) return 'Moderate - Useful market data found';
-        if (percentage >= 20) return 'Limited - Minimal market data found';
-        return 'Poor - Very little market data found';
+        if (foundCount < MIN_ITEMS_FOR_GOOD_QUALITY) return `Limited - Only ${foundCount} relevant item(s) found`;
+        if (foundCount < 15) return 'Moderate - Sufficient relevant market data found';
+        if (foundCount < 50) return 'Good - Substantial relevant market data found';
+        return 'Excellent - Comprehensive relevant market data found';
     }
 } 
