@@ -10,6 +10,12 @@ export interface SimplifiedAuctionItem {
   relevanceScore?: number;
 }
 
+// New type for items after formatting in the report service
+export interface FormattedAuctionItem extends Omit<SimplifiedAuctionItem, 'diff' | 'is_current'> {
+  diff: string; // Required string
+  is_current: boolean; // Required boolean
+}
+
 export interface MarketDataResult {
   query: string;
   data: SimplifiedAuctionItem[];
@@ -104,7 +110,7 @@ export interface EnhancedStatistics {
   confidence_level: string;
   price_trend_percentage: string;
   histogram: HistogramBucket[];
-  comparable_sales: SimplifiedAuctionItem[];
+  comparable_sales: FormattedAuctionItem[];
   value: number;
   target_marker_position: number;
   total_count?: number; // For when we limit the displayed results

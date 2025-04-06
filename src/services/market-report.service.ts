@@ -1,4 +1,4 @@
-import { SimplifiedAuctionItem, HistogramBucket, PriceHistoryPoint } from './types.js';
+import { SimplifiedAuctionItem, HistogramBucket, PriceHistoryPoint, FormattedAuctionItem } from './types.js';
 
 const MIN_ITEMS_FOR_GOOD_QUALITY = 5;
 
@@ -329,24 +329,18 @@ export class MarketReportService {
      * Formats comparable sales data, adding the current item and percentage differences.
      * @param comparableSales - Array of raw comparable sales (the consistent set, pre-limit).
      * @param targetValue - The value of the item being compared against.
-     * @param limit - Optional limit for the number of comparable sales to return (applied *by the caller*).
      * @returns Formatted array of comparable sales including the target item, sorted by price proximity.
      */
     formatComparableSales(
         comparableSales: SimplifiedAuctionItem[],
-        targetValue: number,
-        // limit?: number // Limit is applied by the caller (server.ts) after getting the full formatted list
-    ): SimplifiedAuctionItem[] {
+        targetValue: number
+    ): FormattedAuctionItem[] {
          // Ensure results are sorted by relevance (price proximity)
         const sortedSales = [...comparableSales].sort((a, b) => 
             Math.abs(a.price - targetValue) - Math.abs(b.price - targetValue)
         );
 
-        // Apply limit if specified (before adding the current item)
-        // const limitedSales = limit && limit > 0 ? sortedSales.slice(0, limit) : sortedSales;
-        // ^^^ LIMITING IS REMOVED HERE - done by server.ts
-
-        const formattedSales = sortedSales.map(result => { // Use sortedSales directly
+        const formattedSales: FormattedAuctionItem[] = sortedSales.map(result => {
             const priceDiff = targetValue > 0 ? ((result.price - targetValue) / targetValue) * 100 : 0;
             const diffFormatted = priceDiff >= 0 ? `+${priceDiff.toFixed(1)}%` : `${priceDiff.toFixed(1)}%`;
             return {
@@ -357,14 +351,16 @@ export class MarketReportService {
         });
 
         // Create and insert the current item marker
-        const currentItem: SimplifiedAuctionItem = {
+        const currentItem: FormattedAuctionItem = {
             title: 'Your Item',
             house: '-',
             date: 'Current',
             price: targetValue,
-            currency: formattedSales[0]?.currency || 'USD', // Use currency from others or default
-            diff: '-', // Ensure diff is always a string
-            is_current: true
+            currency: formattedSales[0]?.currency || 'USD',
+            description: undefined,
+            diff: '-',
+            is_current: true,
+            relevanceScore: undefined
         };
 
         // Insert near items with similar prices or at the beginning/end

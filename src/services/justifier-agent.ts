@@ -1,10 +1,10 @@
-import { Configuration, OpenAIApi, CreateChatCompletionRequest } from 'openai';
 import { ValuerService } from './valuer.js';
 import { MarketDataService } from './market-data.js';
 import { ValueResponse, ValueRangeResponse, JustifyResponse, MarketDataResult, AuctionItemWithRelevance } from './types.js';
 import { createSearchStrategyPrompt, createJustificationPrompt, createValueFinderPrompt, createValueRangeFinderPrompt } from './prompts/index.js';
 import { createAccurateValueRangePrompt, createKeywordExtractionPrompt } from './prompts/accurate.js';
-import { callOpenAI, callOpenAIAndParseJson } from './utils/openai-helper.js';
+import OpenAI from 'openai';
+import { callOpenAIAndParseJson } from './utils/openai-helper.js';
 
 // Define interfaces for the expected JSON structures from AI calls
 interface KeywordExtractionResponse {
@@ -36,10 +36,10 @@ interface ValueFinderAIResponse {
 }
 
 export class JustifierAgent {
-  private marketData: MarketDataService;
+  private marketDataService: MarketDataService;
 
   constructor(private openai: OpenAI, valuer: ValuerService) {
-    this.marketData = new MarketDataService(valuer);
+    this.marketDataService = new MarketDataService(valuer);
   }
 
   // Consolidated method for getting search terms, choosing strategy internally
@@ -121,7 +121,7 @@ export class JustifierAgent {
 
     // 2. Search market data
     const minRelevance = useAccurateModel ? 0.7 : 0.5; // Higher relevance for accurate
-    const allResults = await this.marketData.searchMarketData(allSearchTerms, undefined, false, minRelevance);
+    const allResults = await this.marketDataService.searchMarketData(allSearchTerms, undefined, false, minRelevance);
     this.logMarketDataSummary(allResults);
 
     // 3. Call the appropriate AI model for range estimation
@@ -233,7 +233,7 @@ export class JustifierAgent {
     console.log('Justifying valuation for:', { text, value });
 
     const allSearchTerms = await this.getSearchTerms(text, value); // Default to standard search
-    const allResults = await this.marketData.searchMarketData(allSearchTerms, value, true); // isForJustification = true
+    const allResults = await this.marketDataService.searchMarketData(allSearchTerms, value, true); // isForJustification = true
     this.logMarketDataSummary(allResults);
 
     const prompt = createJustificationPrompt(text, value, allResults);
@@ -261,7 +261,7 @@ export class JustifierAgent {
     console.log('Finding value for:', text.substring(0, 100) + '...');
 
     const allSearchTerms = await this.getSearchTerms(text); // Default to standard search
-    const allResults = await this.marketData.searchMarketData(allSearchTerms, undefined, false);
+    const allResults = await this.marketDataService.searchMarketData(allSearchTerms, undefined, false);
     this.logMarketDataSummary(allResults);
 
     const prompt = createValueFinderPrompt(text, allResults);

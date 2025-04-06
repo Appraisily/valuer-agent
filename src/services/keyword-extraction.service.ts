@@ -1,6 +1,5 @@
 import OpenAI from 'openai';
 import { callOpenAIAndParseJson } from './utils/openai-helper.js';
-import { createChatCompletion } from './openai-util.js';
 
 export class KeywordExtractionService {
   constructor(private openai: OpenAI) {}
