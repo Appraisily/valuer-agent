@@ -1,176 +1,163 @@
 import { ValuerResponse, ValuerLot } from './types.js';
 
+// Define the structure for a transformed hit
+interface ValuerHit {
+  lotTitle: string;
+  priceResult: number;
+  currencyCode: string;
+  currencySymbol: string;
+  houseName: string;
+  dateTimeLocal: string;
+  lotNumber: string;
+  saleType: string;
+  lotDescription?: string; // Added optional description
+}
+
+// Update ValuerSearchResponse to use the ValuerHit interface
 export interface ValuerSearchResponse {
-  hits: Array<{
-    lotTitle: string;
-    priceResult: number;
-    currencyCode: string;
-    currencySymbol: string;
-    houseName: string;
-    dateTimeLocal: string;
-    lotNumber: string;
-    saleType: string;
-  }>;
+  hits: ValuerHit[];
+}
+
+// Helper function to transform ValuerLot to ValuerHit
+function transformValuerLotToHit(lot: ValuerLot): ValuerHit {
+  return {
+    lotTitle: lot.title,
+    priceResult: lot.price.amount,
+    currencyCode: lot.price.currency,
+    currencySymbol: lot.price.symbol,
+    houseName: lot.auctionHouse,
+    dateTimeLocal: lot.date,
+    lotNumber: lot.lotNumber,
+    saleType: lot.saleType,
+    lotDescription: lot.description || ''
+  };
 }
 
 export class ValuerService {
   private baseUrl = 'https://valuer-856401495068.us-central1.run.app/api/search';
-  
-  /**
-   * Finds valuable auction results for a given keyword
-   * @param keyword User search keyword
-   * @param minPrice Minimum price to filter results (default: 1000)
-   * @param limit Maximum number of results to return (default: 10)
-   * @returns Promise with auction results matching the criteria
-   */
-  async findValuableResults(keyword: string, minPrice: number = 1000, limit: number = 10): Promise<ValuerSearchResponse> {
-    // Search with the original keyword
-    let results = await this.search(keyword, minPrice);
-    
-    // If not enough results, try with a more focused search by removing some words
-    if (results.hits.length < limit) {
-      const keywords = keyword.split(' ');
-      // If we have multiple words, try with fewer words
-      if (keywords.length > 1) {
-        // Take the most significant words (skip common words like "antique", "vintage", etc.)
-        const significantKeywords = keywords
-          .filter(word => !['antique', 'vintage', 'old', 'the', 'a', 'an'].includes(word.toLowerCase()))
-          .slice(0, 2)
-          .join(' ');
-          
-        if (significantKeywords) {
-          const additionalResults = await this.search(significantKeywords, minPrice);
-          
-          // Merge results, removing duplicates by title
-          const existingTitles = new Set(results.hits.map(hit => hit.lotTitle));
-          additionalResults.hits.forEach(hit => {
-            if (!existingTitles.has(hit.lotTitle)) {
-              results.hits.push(hit);
-              existingTitles.add(hit.lotTitle);
-            }
-          });
-        }
-      }
-    }
-    
-    // Sort by price (highest first) and limit results
-    results.hits.sort((a, b) => b.priceResult - a.priceResult);
-    results.hits = results.hits.slice(0, limit);
-    
-    return results;
-  }
 
+  /**
+   * Core search function to fetch results from the Valuer API.
+   * Focuses on executing a single search request.
+   * @param query Search query string
+   * @param minPrice Optional minimum price filter
+   * @param maxPrice Optional maximum price filter
+   * @param limit Optional limit for the number of results from the API
+   * @returns Promise with the raw search results (hits)
+   */
   async search(query: string, minPrice?: number, maxPrice?: number, limit?: number): Promise<ValuerSearchResponse> {
     const params = new URLSearchParams({
       query,
-      ...(minPrice && { 'priceResult[min]': minPrice.toString() }),
-      ...(maxPrice && { 'priceResult[max]': maxPrice.toString() }),
-      ...(limit && { 'limit': limit.toString() })
+      ...(minPrice !== undefined && { 'priceResult[min]': minPrice.toString() }),
+      ...(maxPrice !== undefined && { 'priceResult[max]': maxPrice.toString() }),
+      ...(limit !== undefined && { 'limit': limit.toString() })
     });
 
-    // Add sorting by relevance and date for more accurate results
+    // Add sorting by relevance
     params.append('sort', 'relevance');
-    
+
     console.log(`Executing valuer search: ${this.baseUrl}?${params}`);
     const response = await fetch(`${this.baseUrl}?${params}`);
 
     if (!response.ok) {
-      console.error('Valuer service error:', await response.text());
-      throw new Error('Failed to fetch from Valuer service');
+      const errorBody = await response.text();
+      console.error('Valuer service error:', errorBody);
+      throw new Error(`Failed to fetch from Valuer service: ${response.statusText}`);
     }
 
     const data = await response.json() as ValuerResponse;
     const lots = Array.isArray(data?.data?.lots) ? data.data.lots : [];
-    
-    // Transform lots into the expected hits format
-    const hits = lots.map((lot: ValuerLot) => ({
-      lotTitle: lot.title,
-      priceResult: lot.price.amount,
-      currencyCode: lot.price.currency,
-      currencySymbol: lot.price.symbol,
-      houseName: lot.auctionHouse,
-      dateTimeLocal: lot.date,
-      lotNumber: lot.lotNumber,
-      saleType: lot.saleType,
-      lotDescription: lot.description || ''
-    }));
-    
-    // If we specified a limit but got fewer results, add supplementary results
-    if (limit && hits.length < limit && minPrice && minPrice > 500) {
-      console.log(`Found only ${hits.length} results with price minimum ${minPrice}, trying with lower minimum...`);
-      
-      // Try with a lower price threshold for supplementary results
-      const lowerMinPrice = Math.floor(minPrice * 0.7);
-      const supplementaryParams = new URLSearchParams({
-        query,
-        'priceResult[min]': lowerMinPrice.toString(),
-        ...(maxPrice && { 'priceResult[max]': maxPrice.toString() }),
-        'limit': (limit - hits.length).toString(),
-        'sort': 'relevance'
-      });
-      
-      try {
-        const supplementaryResponse = await fetch(`${this.baseUrl}?${supplementaryParams}`);
-        if (supplementaryResponse.ok) {
-          const supplementaryData = await supplementaryResponse.json() as ValuerResponse;
-          const supplementaryLots = Array.isArray(supplementaryData?.data?.lots) ? supplementaryData.data.lots : [];
-          
-          // Transform and add the supplementary lots
-          const existingTitles = new Set(hits.map(hit => hit.lotTitle));
-          const supplementaryHits = supplementaryLots
-            .map((lot: ValuerLot) => ({
-              lotTitle: lot.title,
-              priceResult: lot.price.amount,
-              currencyCode: lot.price.currency,
-              currencySymbol: lot.price.symbol,
-              houseName: lot.auctionHouse,
-              dateTimeLocal: lot.date,
-              lotNumber: lot.lotNumber,
-              saleType: lot.saleType,
-              lotDescription: lot.description || ''
-            }))
-            .filter(hit => !existingTitles.has(hit.lotTitle));
-            
-          hits.push(...supplementaryHits);
-          console.log(`Added ${supplementaryHits.length} supplementary results with lower price threshold (${lowerMinPrice})`);
-        }
-      } catch (error) {
-        console.warn('Error fetching supplementary results:', error);
-      }
-    }
-    
-    console.log('Valuer service raw response (first 10 hits):', {
-      total: hits.length,
-      firstTenHits: hits.slice(0, 10).map(hit => ({
-        lotTitle: hit.lotTitle,
-        priceResult: hit.priceResult,
-        houseName: hit.houseName
-      }))
-    });
-    
+
+    // Use the helper function for transformation
+    const hits = lots.map(transformValuerLotToHit);
+
+    console.log(`Valuer service raw response for query "${query}" (found ${hits.length} hits):
+      First 10 titles: ${hits.slice(0, 10).map(h => h.lotTitle).join(', ')}`);
+
     if (hits.length === 0) {
       console.log('No results found for query:', query);
-      console.log('Raw response:', JSON.stringify(data, null, 2));
+      // console.log('Raw response:', JSON.stringify(data, null, 2)); // Optionally log full raw response on no results
     }
-    
+
     return { hits };
   }
 
+  /**
+   * Finds valuable auction results for a given keyword, potentially refining the search.
+   * Handles retrying with a simpler keyword if initial results are insufficient.
+   * @param keyword User search keyword
+   * @param minPrice Minimum price to filter results (default: 1000)
+   * @param limit Maximum number of results to return *after* merging and sorting (default: 10)
+   * @returns Promise with auction results matching the criteria, sorted and limited.
+   */
+  async findValuableResults(keyword: string, minPrice: number = 1000, limit: number = 10): Promise<ValuerSearchResponse> {
+    // Initial search with the original keyword and a potentially larger internal limit
+    // Fetch more initially (e.g., limit * 2) to allow for better merging/filtering later
+    const initialLimit = limit * 2;
+    let results = await this.search(keyword, minPrice, undefined, initialLimit);
+    const allHits = [...results.hits];
+    const seenTitles = new Set(allHits.map(hit => hit.lotTitle));
+
+    // If not enough results, try with a more focused search by removing some words
+    if (allHits.length < limit) {
+      const keywords = keyword.split(' ');
+      if (keywords.length > 1) {
+        const significantKeywords = keywords
+          .filter(word => !['antique', 'vintage', 'old', 'the', 'a', 'an'].includes(word.toLowerCase()))
+          .slice(0, 3) // Use up to 3 significant keywords
+          .join(' ');
+
+        if (significantKeywords && significantKeywords !== keyword) {
+          console.log(`Initial search for "${keyword}" yielded ${allHits.length} results (less than limit ${limit}). Retrying with "${significantKeywords}"`);
+          // Fetch remaining needed results with the refined query
+          const remainingLimit = initialLimit - allHits.length;
+          const additionalResults = await this.search(significantKeywords, minPrice, undefined, remainingLimit > 0 ? remainingLimit : undefined);
+
+          // Merge results, removing duplicates by title
+          additionalResults.hits.forEach(hit => {
+            if (!seenTitles.has(hit.lotTitle)) {
+              allHits.push(hit);
+              seenTitles.add(hit.lotTitle);
+            }
+          });
+          console.log(`Found ${additionalResults.hits.length} additional results. Total unique hits: ${allHits.length}`);
+        }
+      }
+    }
+
+    // Sort all collected hits by price (highest first) and apply the final limit
+    allHits.sort((a, b) => b.priceResult - a.priceResult);
+    const finalHits = allHits.slice(0, limit);
+
+    console.log(`Returning ${finalHits.length} final results for "${keyword}" after sorting and limiting.`);
+
+    return { hits: finalHits };
+  }
+
+  /**
+   * Finds items similar to a description within a specific price range.
+   * @param description Item description used as search query
+   * @param targetValue Optional target value to define price range
+   * @returns Promise with auction results within the price range.
+   */
   async findSimilarItems(description: string, targetValue?: number): Promise<ValuerSearchResponse> {
     if (!targetValue) {
-      return this.search(description);
+      // If no target value, just search with a default limit
+      return this.search(description, undefined, undefined, 20);
     }
-    
-    console.log('Searching for similar items:', {
-      description,
-      targetValue,
-      minPrice: Math.floor(targetValue * 0.7),
-      maxPrice: Math.ceil(targetValue * 1.3)
-    });
-    
+
+    // Calculate a price range around the target value
     const minPrice = Math.floor(targetValue * 0.7);
     const maxPrice = Math.ceil(targetValue * 1.3);
 
-    return this.search(description, minPrice, maxPrice);
+    console.log('Searching for similar items:', {
+      description,
+      targetValue,
+      minPrice,
+      maxPrice
+    });
+
+    // Search within the calculated price range, limit results
+    return this.search(description, minPrice, maxPrice, 20); // Limit results for similarity search
   }
 }
