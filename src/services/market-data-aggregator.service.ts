@@ -1,8 +1,5 @@
 import { MarketDataService } from './market-data.js';
-import { SimplifiedAuctionItem, MarketDataResult } from './types.js';
-
-// Type for query groups used in progressive search
-export type QueryGroups = Record<string, string[]>;
+import { SimplifiedAuctionItem, MarketDataResult, QueryGroups } from './types.js';
 
 const MAX_SEARCH_LEVELS = 5; // Maximum progressive search levels
 const MIN_RELEVANT_ITEMS = 5; // Minimum items to stop searching early
@@ -19,7 +16,7 @@ export class MarketDataAggregatorService {
    * @param targetCount - The *initial* desired number of items (influences early search attempts).
    * @param minPrice - Optional minimum price filter.
    * @param maxPrice - Optional maximum price filter.
-   * @returns Array of unique, simplified auction items, sorted by relevance (price proximity).
+   * @returns An object containing unique auction items and a map of keyword to result count.
    */
   async gatherAuctionDataProgressively(
     queryGroups: QueryGroups,
@@ -27,7 +24,10 @@ export class MarketDataAggregatorService {
     targetCount: number = 100,
     minPrice?: number,
     maxPrice?: number
-  ): Promise<SimplifiedAuctionItem[]> {
+  ): Promise<{
+    items: SimplifiedAuctionItem[],
+    keywordCounts: Map<string, number>
+  }> {
     console.log(`Gathering auction data (initial target: ${targetCount}, min items: ${MIN_RELEVANT_ITEMS}, max levels: ${MAX_SEARCH_LEVELS})`);
 
     const effectiveMinPrice = minPrice ?? Math.floor(targetValue * 0.6);
@@ -36,6 +36,7 @@ export class MarketDataAggregatorService {
 
     const allItems: SimplifiedAuctionItem[] = [];
     const seenItemKeys = new Set<string>();
+    const keywordCounts = new Map<string, number>();
     let currentLevel = 0;
     // Define search order - ensure it has levels for MAX_SEARCH_LEVELS + potential broad level
     const searchOrder = ['very specific', 'specific', 'moderate', 'broad', 'very broad']; // Added 'very broad' for clarity
@@ -74,6 +75,12 @@ export class MarketDataAggregatorService {
 
         // Process and deduplicate results from this level
         const newItemsCount = this.addUniqueItems(levelResults, allItems, seenItemKeys);
+        
+        // Track results count per keyword
+        levelResults.forEach(result => {
+            keywordCounts.set(result.query, result.data.length);
+        });
+        
         console.log(`Level ${currentLevel} ("${level}"): Found ${newItemsCount} new unique items. Total unique items: ${allItems.length}`);
 
         // Check if we've reached our target count - only stop then
@@ -116,6 +123,12 @@ export class MarketDataAggregatorService {
                 effectiveMaxPrice * 1.5
             );
              const finalNewCount = this.addUniqueItems(finalResults, allItems, seenItemKeys);
+             
+             // Track results count for final queries
+             finalResults.forEach(result => {
+                 keywordCounts.set(result.query, result.data.length);
+             });
+             
              console.log(`Final Attempt: Added ${finalNewCount} more items. Total unique items: ${allItems.length}`);
         } else {
             console.log("Final Attempt: No broad queries available to run.");
@@ -164,7 +177,10 @@ export class MarketDataAggregatorService {
     //     item.relevanceScore = 1 - (index / allItems.length); // Simple linear score
     // });
 
-    return allItems; // Return all gathered and sorted items
+    return {
+      items: allItems,
+      keywordCounts: keywordCounts
+    }; // Return all gathered and sorted items
   }
 
    /** Helper function to fetch and log results for a level */

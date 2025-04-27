@@ -14,6 +14,7 @@ export interface SimplifiedAuctionItem {
 export interface FormattedAuctionItem extends Omit<SimplifiedAuctionItem, 'diff' | 'is_current'> {
   diff: string; // Required string
   is_current: boolean; // Required boolean
+  quality_score?: number; // Add quality score to output JSON
 }
 
 export interface MarketDataResult {
@@ -125,10 +126,10 @@ export interface EnhancedStatistics {
   
   // Search keyword information
   search_keywords?: {
-    very_specific: string[];
-    specific: string[];
-    moderate: string[];
-    broad: string[];
+    very_specific: Array<{keyword: string, count: number}>;
+    specific: Array<{keyword: string, count: number}>;
+    moderate: Array<{keyword: string, count: number}>;
+    broad: Array<{keyword: string, count: number}>;
     total_count: number;
   };
 }
@@ -138,4 +139,12 @@ export interface EnhancedStatisticsResponse {
   success: boolean;
   statistics: EnhancedStatistics;
   all_auction_results: SimplifiedAuctionItem[]; // All auction results found
+}
+
+export interface QueryGroups {
+  'very specific': string[];
+  'specific': string[];
+  'moderate': string[];
+  'broad': string[];
+  'very broad': string[];
 }

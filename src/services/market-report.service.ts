@@ -370,12 +370,10 @@ export class MarketReportService {
                 is_current: false
             };
             
-            // If we have a quality score, preserve it in the output
+            // If we have a quality score, include it in the output
             if (typeof (result as any).quality_score === 'number') {
-                formatted = {
-                    ...formatted,
-                    relevanceScore: (result as any).quality_score
-                };
+                formatted.quality_score = (result as any).quality_score;
+                formatted.relevanceScore = (result as any).quality_score; // Keep for backward compatibility
             }
             
             return formatted;

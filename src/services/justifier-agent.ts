@@ -57,7 +57,8 @@ export class JustifierAgent {
       const response = await callOpenAIAndParseJson<string[]>(this.openai, {
         model: "o3-mini",
         systemMessage: "You are an expert in antiques and auctions. Your task is to create effective search queries as a JSON array of strings that will find relevant comparable items in auction databases.",
-        userPrompt: prompt
+        userPrompt: prompt,
+        expectJsonResponse: true
       });
       console.log('\n=== AI Standard Search Strategy ===\nGenerated queries:', 
         response.slice(0, 10).map((q: string, i: number) => `${i + 1}. ${q}`).join('\n')
@@ -77,7 +78,8 @@ export class JustifierAgent {
       const keywordData = await callOpenAIAndParseJson<KeywordExtractionResponse>(this.openai, {
         model: "o3-mini", // Keep o3-mini for keyword extraction speed?
         systemMessage: "You are an expert in auction terminology and search optimization. Extract precise keywords that would appear in auction catalogs. Return a JSON object with keys 'primaryKeywords', 'secondaryKeywords', 'categoryTerms', each containing an array of strings.",
-        userPrompt: prompt
+        userPrompt: prompt,
+        expectJsonResponse: true
       });
 
       const primaryKeywords = keywordData.primaryKeywords || [];
@@ -155,7 +157,8 @@ export class JustifierAgent {
     return await callOpenAIAndParseJson<ValueRangeAIResponse>(this.openai, {
       model: "o3-mini",
       systemMessage: systemMessage,
-      userPrompt: prompt
+      userPrompt: prompt,
+      expectJsonResponse: true
     });
   }
 
@@ -166,7 +169,8 @@ export class JustifierAgent {
     return await callOpenAIAndParseJson<ValueRangeAIResponse>(this.openai, {
       model: "gpt-4o", // Use more capable model for accuracy
       systemMessage: systemMessage,
-      userPrompt: prompt
+      userPrompt: prompt,
+      expectJsonResponse: true
     });
   }
 
@@ -243,7 +247,8 @@ export class JustifierAgent {
         const response = await callOpenAIAndParseJson<JustificationAIResponse>(this.openai, {
             model: "o3-mini",
             systemMessage: systemMessage,
-            userPrompt: prompt
+            userPrompt: prompt,
+            expectJsonResponse: true
         });
         return {
             explanation: response.explanation || 'Unable to generate explanation',
@@ -271,13 +276,14 @@ export class JustifierAgent {
         const response = await callOpenAIAndParseJson<ValueFinderAIResponse>(this.openai, {
             model: "o3-mini",
             systemMessage: systemMessage,
-            userPrompt: prompt
+            userPrompt: prompt,
+            expectJsonResponse: true
         });
         return {
             value: response.calculatedValue || 0,
             explanation: response.explanation || 'Unable to generate explanation'
         };
-     } catch (error) {
+    } catch (error) {
         console.error('Failed to calculate value:', error);
         throw new Error('Failed to calculate value due to AI processing error.');
     }

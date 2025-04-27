@@ -67,12 +67,8 @@ Example response format for "Antique Meissen Porcelain Tea Set with Floral Desig
         const keywords = await callOpenAIAndParseJson<string[]>(this.openai, {
             model: "gpt-4o", 
             systemMessage: "You are an expert in auction terminology, art, antiques, and collectibles categorization. Generate optimal search queries for finding comparable auction items, returning ONLY a valid JSON array of strings with exactly 5 very specific, 10 specific, 5 moderate, and 5 broad queries.",
-            userPrompt: prompt
-        },
-        // Add a parser function to handle potential markdown code blocks around the JSON array
-        (content) => {
-            const jsonMatch = content.match(/\`\`\`json\n?(\[.*\])\n?\`\`\`/s) || content.match(/(\[.*\])/s);
-            return jsonMatch ? jsonMatch[1] : content;
+            userPrompt: prompt,
+            expectJsonResponse: true
         });
 
         if (!Array.isArray(keywords) || keywords.length === 0) {

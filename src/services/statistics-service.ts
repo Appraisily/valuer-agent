@@ -71,11 +71,37 @@ export class StatisticsService {
 
     // 2. Gather Auction Data (using the new relevance-focused logic)
     // The aggregator now returns *all* relevant items it found, sorted by price proximity.
-    const gatheredAuctionData = await this.marketDataAggregatorService.gatherAuctionDataProgressively(
+    const gatherResult = await this.marketDataAggregatorService.gatherAuctionDataProgressively(
         queryGroups, value, targetCount, minPrice, maxPrice
     );
+    const gatheredAuctionData = gatherResult.items;
+    const keywordCounts = gatherResult.keywordCounts;
+    
     const searchTime = (Date.now() - startTime) / 1000;
-    console.log(`Found ${gatheredAuctionData.length} unique, relevant auction items in ${searchTime.toFixed(1)} seconds`);
+    console.log(`\nAuction data gathering complete: ${gatheredAuctionData.length} unique items found in ${searchTime.toFixed(1)}s`);
+
+    // 3. Check if we have sufficient data for analysis
+    if (gatheredAuctionData.length === 0) {
+      console.warn('No auction data found for statistical analysis. Using fallback approach.');
+      // Return minimal statistics with explanation
+      const keywordCategories = {
+        very_specific: very_specific.map(keyword => ({keyword, count: keywordCounts.get(keyword) || 0})),
+        specific: specific.map(keyword => ({keyword, count: keywordCounts.get(keyword) || 0})),
+        moderate: moderate.map(keyword => ({keyword, count: keywordCounts.get(keyword) || 0})),
+        broad: broad.map(keyword => ({keyword, count: keywordCounts.get(keyword) || 0})),
+      };
+      return this.generateFallbackStatistics(value, gatheredAuctionData, 'No Data', keywordCategories);
+    } else if (gatheredAuctionData.length < 5) {
+      console.warn(`Limited auction data found (${gatheredAuctionData.length} items). Using fallback approach.`);
+      // Return limited statistics with explanation
+      const keywordCategories = {
+        very_specific: very_specific.map(keyword => ({keyword, count: keywordCounts.get(keyword) || 0})),
+        specific: specific.map(keyword => ({keyword, count: keywordCounts.get(keyword) || 0})),
+        moderate: moderate.map(keyword => ({keyword, count: keywordCounts.get(keyword) || 0})),
+        broad: broad.map(keyword => ({keyword, count: keywordCounts.get(keyword) || 0})),
+      };
+      return this.generateFallbackStatistics(value, gatheredAuctionData, 'Limited Data', keywordCategories);
+    }
 
     // NEW STEP: Assess quality of auction results using AI
     const auctionDataWithQuality = await assessAuctionResultsQuality(
@@ -91,7 +117,7 @@ export class StatisticsService {
         result => result && typeof result.price === 'number' && !isNaN(result.price) && result.price > 0
     );
 
-    // 3. Calculate Core Statistics (using the consistent dataset)
+    // 4. Calculate Core Statistics (using the consistent dataset)
     const coreStats = this.statisticalAnalysisService.calculateCoreStatistics(validAnalysisData, value);
 
     // Handle cases with insufficient data for full stats
@@ -105,13 +131,13 @@ export class StatisticsService {
 
     // --- Proceed with full report generation using the consistent analysisData --- 
 
-    // 4. Generate Report Components (Trend, History, Histogram)
+    // 5. Generate Report Components (Trend, History, Histogram)
     const priceTrendPercentage = this.marketReportService.calculatePriceTrend(analysisData);
     const priceHistory = this.marketReportService.generatePriceHistory(analysisData, value);
     const validPricesForHistogram = validAnalysisData.map(item => item.price).sort((a, b) => a - b);
     const histogram = this.marketReportService.createHistogramBuckets(validPricesForHistogram, value);
 
-    // 5. Calculate Additional Qualitative Metrics (using results from core stats)
+    // 6. Calculate Additional Qualitative Metrics (using results from core stats)
     const additionalMetricsInput = {
         zScore: coreStats.z_score,
         percentile: coreStats.target_percentile_raw,
@@ -120,7 +146,7 @@ export class StatisticsService {
     };
     const additionalMetrics = this.statisticalAnalysisService.calculateAdditionalMetrics(additionalMetricsInput);
     
-    // 6. Format Final Report Components
+    // 7. Format Final Report Components
     const formattedPercentile = this.statisticalAnalysisService.getOrdinalSuffix(coreStats.target_percentile_raw);
     // Format comparables using the consistent data (limit applied later by server.ts)
     const comparableSales = this.marketReportService.formatComparableSales(analysisData, value);
@@ -135,7 +161,7 @@ export class StatisticsService {
         ? ((value - coreStats.price_min) / (coreStats.price_max - coreStats.price_min)) * 100 
         : 50; // Center if min=max
 
-    // 7. Assemble the Final EnhancedStatistics Object
+    // 8. Assemble the Final EnhancedStatistics Object
     const enhancedStats: EnhancedStatistics = {
         // Core Stats from the analysisData subset
         count: coreStats.count,
@@ -162,10 +188,10 @@ export class StatisticsService {
         data_quality: dataQuality,
         // Include search keywords information
         search_keywords: {
-          very_specific,
-          specific,
-          moderate,
-          broad,
+          very_specific: very_specific.map(keyword => ({keyword, count: keywordCounts.get(keyword) || 0})),
+          specific: specific.map(keyword => ({keyword, count: keywordCounts.get(keyword) || 0})),
+          moderate: moderate.map(keyword => ({keyword, count: keywordCounts.get(keyword) || 0})),
+          broad: broad.map(keyword => ({keyword, count: keywordCounts.get(keyword) || 0})),
           total_count: keywords.length
         }
         // total_count is removed - added by server.ts if it limits comparable_sales
@@ -187,10 +213,10 @@ export class StatisticsService {
       foundData: SimplifiedAuctionItem[],
       reason: 'No Data' | 'Limited Data',
       keywordCategories?: {
-        very_specific: string[];
-        specific: string[];
-        moderate: string[];
-        broad: string[];
+        very_specific: { keyword: string; count: number }[];
+        specific: { keyword: string; count: number }[];
+        moderate: { keyword: string; count: number }[];
+        broad: { keyword: string; count: number }[];
       }
   ): EnhancedStatistics {
       const count = foundData.length;
