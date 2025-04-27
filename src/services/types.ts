@@ -66,6 +66,7 @@ export interface AuctionItemWithRelevance extends SimplifiedAuctionItem {
   relevanceScore?: number;
   adjustmentFactor?: number;
   relevanceReason?: string;
+  quality_score?: number; // AI-generated quality assessment (0-100)
 }
 
 export interface ValueRangeResponse {
@@ -121,6 +122,15 @@ export interface EnhancedStatistics {
   investment_potential: number; // Investment potential score (0-100)
   provenance_strength: number; // Provenance strength score (0-100)
   data_quality?: string; // Data quality indicator based on search results
+  
+  // Search keyword information
+  search_keywords?: {
+    very_specific: string[];
+    specific: string[];
+    moderate: string[];
+    broad: string[];
+    total_count: number;
+  };
 }
 
 // Response for the enhanced-statistics endpoint

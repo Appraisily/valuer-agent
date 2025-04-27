@@ -76,10 +76,15 @@ export class MarketDataAggregatorService {
         const newItemsCount = this.addUniqueItems(levelResults, allItems, seenItemKeys);
         console.log(`Level ${currentLevel} ("${level}"): Found ${newItemsCount} new unique items. Total unique items: ${allItems.length}`);
 
-        // Check for early exit condition
+        // Check if we've reached our target count - only stop then
+        if (allItems.length >= targetCount) {
+            console.log(`Target count (${targetCount}) reached at level ${currentLevel}. Stopping progressive search.`);
+            break;
+        }
+        
+        // Log for MIN_RELEVANT_ITEMS but don't stop searching
         if (allItems.length >= MIN_RELEVANT_ITEMS) {
-            console.log(`Minimum relevant items (${MIN_RELEVANT_ITEMS}) threshold reached at level ${currentLevel}. Stopping progressive search.`);
-            break; // Exit loop if we have enough relevant items
+            console.log(`Minimum relevant items (${MIN_RELEVANT_ITEMS}) threshold reached at level ${currentLevel}. Continuing search to find more items.`);
         }
     } // End of progressive search loop
 
@@ -114,6 +119,32 @@ export class MarketDataAggregatorService {
              console.log(`Final Attempt: Added ${finalNewCount} more items. Total unique items: ${allItems.length}`);
         } else {
             console.log("Final Attempt: No broad queries available to run.");
+        }
+    }
+    
+    // Add an extra attempt if we're still far from our target count
+    if (allItems.length < targetCount * 0.5 && currentLevel <= MAX_SEARCH_LEVELS) {
+        console.log(`\n--- Extra Search Attempt: Only found ${allItems.length}/${targetCount} items. Trying broader search. ---`);
+        
+        // Combine all query levels, prioritizing broader terms as they might find different results
+        let extraQueries = [
+            ...(queryGroups['broad'] || []), 
+            ...(queryGroups['moderate'] || []),
+            ...(queryGroups['specific'] || [])
+        ].slice(0, 10); // Limit to 10 queries to avoid excessive searching
+        
+        if (extraQueries.length > 0) {
+            console.log(`Executing ${extraQueries.length} extra queries with expanded price range`);
+            const extraResults = await this.fetchAndProcessLevel(
+                extraQueries,
+                targetValue,
+                0.1, // Very low relevance threshold
+                targetCount - allItems.length, // Try to find remaining items
+                effectiveMinPrice * 0.5, // Much broader price range
+                effectiveMaxPrice * 2
+            );
+            const extraCount = this.addUniqueItems(extraResults, allItems, seenItemKeys);
+            console.log(`Extra Search: Added ${extraCount} more items. Total unique items: ${allItems.length}`);
         }
     }
 
@@ -210,7 +241,30 @@ export class MarketDataAggregatorService {
           console.warn("Received empty query list for grouping.");
           return { 'very specific': [], 'specific': [], 'moderate': [], 'broad': [], 'very broad': [] };
       }
-
+      
+      // Check if we're receiving the new structured 5-10-5-5 format (25 total queries)
+      if (queries.length === 25) {
+        // New structured format - use the predefined slices
+        console.log("Using structured keyword format (5-10-5-5)");
+        const groups: QueryGroups = {
+          'very specific': queries.slice(0, 5),
+          'specific': queries.slice(5, 15),
+          'moderate': queries.slice(15, 20),
+          'broad': queries.slice(20, 25),
+          'very broad': [] // Initially empty, will be populated from broad if needed
+        };
+        
+        // Add some very broad terms for emergency fallback
+        groups['very broad'] = groups['broad'].flatMap(q => q.split(' ')).filter(w => 
+          w.length > 2 && !['the','a','an','is','at','on','in','for','of'].includes(w.toLowerCase())
+        );
+        
+        console.log("Structured Query Groups:", JSON.stringify(groups));
+        return groups;
+      }
+      
+      // Fallback to original method for backward compatibility
+      console.log("Using traditional keyword grouping (not structured 5-10-5-5 format)");
       const groups: QueryGroups = {
         'very specific': queries.filter(q => q.split(' ').length >= 5),
         'specific': queries.filter(q => q.split(' ').length >= 3 && q.split(' ').length < 5),
@@ -269,7 +323,7 @@ export class MarketDataAggregatorService {
       groups['broad'] = groups['broad'] || [];
       groups['very broad'] = groups['very broad'] || []; // Ensure it exists
 
-       console.log("Query Groups:", JSON.stringify(groups));
+      console.log("Traditional Query Groups:", JSON.stringify(groups));
       return groups;
   }
 

@@ -193,50 +193,14 @@ export class MarketDataService {
         console.log(`\nProcessed ${resultCount} items for query "${query}"`);
         
         if (resultCount > 0) {
-          // Enhanced relevance scoring that considers:
-          // 1. Query specificity (more words = higher specificity)
-          // 2. Result count (fewer results often means more relevant/targeted)
-          // 3. Query match quality (exact phrase matches in titles get higher scores)
+          // Simplified relevance - just based on query word count
+          // This is a temporary solution until a more sophisticated system is implemented later
+          const wordCount = query.split(' ').length;
+          const relevanceLabel = wordCount >= 4 ? 'very high' : 
+                                wordCount >= 3 ? 'high' : 
+                                wordCount >= 2 ? 'medium' : 'broad';
           
-          // 1. Specificity score (0-1)
-          const specificity = Math.min(1, query.split(' ').length / 5); // 5+ words is max specificity
-          
-          // 2. Result count score (0-1) - Fewer results often indicate higher relevance
-          // But we don't penalize too heavily if we find many results for high-specificity queries
-          const countPenalty = specificity >= 0.8 ? 0.5 : 1.0; // Reduce penalty for highly specific queries
-          const idealCount = maxResultsNeeded ? Math.min(20, maxResultsNeeded * 0.3) : 15; // Ideal count is ~30% of target
-          const sizeScore = Math.min(1, (idealCount / Math.max(1, resultCount)) * countPenalty);
-          
-          // 3. Match quality score (0-1) - Check if terms from query appear in titles
-          const queryTerms = new Set(query.toLowerCase().split(' ').filter(t => t.length > 3));
-          let matchScoreSum = 0;
-          
-          for (const item of simplifiedData.slice(0, Math.min(resultCount, 10))) { // Check first 10 items
-            const titleTerms = new Set(item.title.toLowerCase().split(' ').filter(t => t.length > 3));
-            const matchCount = [...queryTerms].filter(term => titleTerms.has(term)).length;
-            const termMatchScore = queryTerms.size > 0 ? matchCount / queryTerms.size : 0;
-            matchScoreSum += termMatchScore;
-          }
-          
-          const matchQualityScore = simplifiedData.length > 0 
-            ? matchScoreSum / Math.min(resultCount, 10) 
-            : 0;
-          
-          // Combined relevance score with weighted components
-          const relevanceScore = Math.min(1, (specificity * 0.5) + (sizeScore * 0.3) + (matchQualityScore * 0.2));
-          
-          const relevanceLabel = 
-            relevanceScore >= 0.8 ? 'very high' :
-            relevanceScore >= 0.6 ? 'high' :
-            relevanceScore >= 0.4 ? 'medium' : 'broad';
-            
-          console.log(`Relevance calculation:`, {
-            specificity: specificity.toFixed(2),
-            sizeScore: sizeScore.toFixed(2),
-            matchQuality: matchQualityScore.toFixed(2),
-            final: relevanceScore.toFixed(2),
-            label: relevanceLabel
-          });
+          console.log(`Simplified relevance assignment: "${relevanceLabel}" (based on ${wordCount} words in query)`);
           
           allResults.push({ 
             query, 
@@ -255,17 +219,15 @@ export class MarketDataService {
           
           console.log(`Total unique items found so far: ${totalItemsFound}`);
           
-          // Stop if we have enough high-quality results and a substantial total
-          const highRelevanceCount = allResults.filter(
-            r => r.relevance === 'very high' || r.relevance === 'high'
-          ).length;
+          // Use simple thresholds for stopping search
+          const hasEnoughResults = (
+            allResults.filter(r => r.relevance === 'very high' || r.relevance === 'high').length >= 2 &&
+            totalItemsFound >= (maxResultsNeeded ? maxResultsNeeded * 0.5 : 20)
+          );
           
-          const hasEnoughHighQuality = highRelevanceCount >= requiredHighRelevanceResults;
-          const hasSubstantialTotal = maxResultsNeeded ? (totalItemsFound >= maxResultsNeeded * 0.7) : (totalItemsFound >= 30);
-          
-          if (hasEnoughHighQuality && hasSubstantialTotal) {
-            console.log('\n=== Search Complete (Quality Threshold) ===');
-            console.log(`Found sufficient relevant items (${highRelevanceCount} high-relevance results, ${totalItemsFound} total items)`);
+          if (hasEnoughResults) {
+            console.log('\n=== Search Complete (Basic Threshold) ===');
+            console.log(`Found sufficient items (${totalItemsFound} total items)`);
             break;
           }
         }

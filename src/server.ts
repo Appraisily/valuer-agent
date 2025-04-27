@@ -256,12 +256,37 @@ app.post('/api/enhanced-statistics', asyncHandler(async (req, res) => {
 app.use((err: Error, req: Request, res: Response, _next: NextFunction) => {
   console.error(`Error processing request ${req.method} ${req.path}:`, err);
 
+  // Handle JSON parsing errors (malformed JSON)
+  if (err instanceof SyntaxError && 'body' in err) {
+    console.log('Received malformed JSON:', err.message);
+    
+    // Get example request body based on endpoint
+    const exampleRequestBody = getExampleRequestBody(req.path);
+    
+    return res.status(400).json({
+      success: false,
+      error: 'Malformed JSON request',
+      message: 'Your request contains invalid JSON syntax. Please check your request body.',
+      correctFormat: {
+        description: `Here's the correct format for ${req.path}:`,
+        example: exampleRequestBody
+      }
+    });
+  }
+
   // Handle Zod validation errors specifically
   if (err instanceof ZodError) {
+    // Get example request body based on endpoint
+    const exampleRequestBody = getExampleRequestBody(req.path);
+    
     return res.status(400).json({
       success: false,
       error: 'Invalid request body',
       details: err.errors,
+      correctFormat: {
+        description: `Here's the correct format for ${req.path}:`,
+        example: exampleRequestBody
+      }
     });
   }
 
@@ -288,6 +313,58 @@ app.use((err: Error, req: Request, res: Response, _next: NextFunction) => {
   });
 });
 
+/**
+ * Get example request body based on endpoint path
+ */
+function getExampleRequestBody(path: string): any {
+  switch (path) {
+    case '/api/justify':
+      return {
+        text: "Antique sterling silver tea set from the Victorian era, circa 1880",
+        value: 2500
+      };
+    
+    case '/api/find-value':
+      return {
+        text: "Antique sterling silver tea set from the Victorian era, circa 1880"
+      };
+    
+    case '/api/find-value-range':
+      return {
+        text: "Antique sterling silver tea set from the Victorian era, circa 1880",
+        useAccurateModel: true // Optional, defaults to false
+      };
+    
+    case '/api/auction-results':
+      return {
+        keyword: "Victorian silver tea set",
+        minPrice: 1000, // Optional, defaults to 1000
+        limit: 10 // Optional, defaults to 10
+      };
+    
+    case '/api/wp2hugo-auction-results':
+      return {
+        keyword: "Victorian silver tea set",
+        minPrice: 1000, // Optional, defaults to 1000
+        limit: 10 // Optional, defaults to 10
+      };
+    
+    case '/api/enhanced-statistics':
+      return {
+        text: "Original Jean-Michel Basquiat Painting, 8.25x12 inches, untitled work from 1982",
+        value: 5000000,
+        limit: 20, // Optional, defaults to 20
+        targetCount: 100, // Optional, defaults to 100
+        minPrice: 1000000, // Optional
+        maxPrice: 10000000 // Optional
+      };
+    
+    default:
+      return {
+        message: "Unknown endpoint. Please check the API documentation."
+      };
+  }
+}
 
 const port = process.env.PORT || 8080;
 

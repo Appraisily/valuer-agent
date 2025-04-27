@@ -326,28 +326,59 @@ export class MarketReportService {
     }
 
     /**
-     * Formats comparable sales data, adding the current item and percentage differences.
+     * Formats comparable sales data, adding the current item and prioritizing items with higher quality scores.
      * @param comparableSales - Array of raw comparable sales (the consistent set, pre-limit).
      * @param targetValue - The value of the item being compared against.
-     * @returns Formatted array of comparable sales including the target item, sorted by price proximity.
+     * @returns Formatted array of comparable sales including the target item, sorted by quality/relevance.
      */
     formatComparableSales(
         comparableSales: SimplifiedAuctionItem[],
         targetValue: number
     ): FormattedAuctionItem[] {
-         // Ensure results are sorted by relevance (price proximity)
-        const sortedSales = [...comparableSales].sort((a, b) => 
-            Math.abs(a.price - targetValue) - Math.abs(b.price - targetValue)
+        // First, check if we have quality scores from o3-mini
+        const hasQualityScores = comparableSales.some(item => 
+            typeof (item as any).quality_score === 'number'
         );
-
-        const formattedSales: FormattedAuctionItem[] = sortedSales.map(result => {
+        
+        // Sort by quality score if available, otherwise by price proximity
+        const sortedSales = [...comparableSales].sort((a, b) => {
+            if (hasQualityScores) {
+                // Higher quality score comes first (descending order)
+                const qualityA = (a as any).quality_score || 0;
+                const qualityB = (b as any).quality_score || 0;
+                return qualityB - qualityA;
+            } else {
+                // Fallback to price proximity (ascending order)
+                return Math.abs(a.price - targetValue) - Math.abs(b.price - targetValue);
+            }
+        });
+        
+        // Limit to top 10 results if we have quality scores
+        const topSales = hasQualityScores 
+            ? sortedSales.slice(0, 10) 
+            : sortedSales;
+        
+        // Format the sales with diff percentage
+        const formattedSales: FormattedAuctionItem[] = topSales.map(result => {
             const priceDiff = targetValue > 0 ? ((result.price - targetValue) / targetValue) * 100 : 0;
             const diffFormatted = priceDiff >= 0 ? `+${priceDiff.toFixed(1)}%` : `${priceDiff.toFixed(1)}%`;
-            return {
+            
+            // Include quality score in the output if available
+            let formatted: FormattedAuctionItem = {
                 ...result,
                 diff: diffFormatted,
                 is_current: false
             };
+            
+            // If we have a quality score, preserve it in the output
+            if (typeof (result as any).quality_score === 'number') {
+                formatted = {
+                    ...formatted,
+                    relevanceScore: (result as any).quality_score
+                };
+            }
+            
+            return formatted;
         });
 
         // Create and insert the current item marker
@@ -363,27 +394,91 @@ export class MarketReportService {
             relevanceScore: undefined
         };
 
-        // Insert near items with similar prices or at the beginning/end
-        let insertIndex = formattedSales.findIndex(sale => sale.price >= targetValue);
-        if (insertIndex === -1) insertIndex = formattedSales.length; // Insert at end if all are lower
+        // If sorting by quality score, add the current item at the beginning
+        if (hasQualityScores) {
+            formattedSales.unshift(currentItem);
+        } else {
+            // Otherwise insert near items with similar prices
+            let insertIndex = formattedSales.findIndex(sale => sale.price >= targetValue);
+            if (insertIndex === -1) insertIndex = formattedSales.length; // Insert at end if all are lower
+            formattedSales.splice(insertIndex, 0, currentItem);
+        }
         
-        formattedSales.splice(insertIndex, 0, currentItem);
+        // If we sorted by quality score, log the scores
+        if (hasQualityScores) {
+            console.log('Comparable sales sorted by AI quality score:');
+            formattedSales.forEach((sale, index) => {
+                if (!sale.is_current) {
+                    console.log(`${index}. Score: ${sale.relevanceScore || 'N/A'}, Title: "${sale.title.substring(0, 50)}..."`);
+                }
+            });
+        }
 
         return formattedSales;
     }
 
     /**
-     * Determines data quality based on finding a minimum number of relevant items.
+     * Determines data quality based on finding a minimum number of relevant items and their quality scores.
      * @param foundCount - Number of auction items found and used for analysis.
-     * @param _targetCount - Original target count (now less relevant for quality). Not used.
+     * @param _targetCount - Original target count (now less relevant for quality).
+     * @param auctionResults - Optional array of auction results with quality scores.
      * @returns Data quality indicator string.
      */
-    determineDataQuality(foundCount: number, _targetCount: number): string {
-        // Quality is now primarily based on getting at least MIN_ITEMS_FOR_GOOD_QUALITY
+    determineDataQuality(
+        foundCount: number, 
+        _targetCount: number,
+        auctionResults?: SimplifiedAuctionItem[]
+    ): string {
+        // If no items found, return poor quality
         if (foundCount === 0) return 'Poor - No comparable market data found';
-        if (foundCount < MIN_ITEMS_FOR_GOOD_QUALITY) return `Limited - Only ${foundCount} relevant item(s) found`;
-        if (foundCount < 15) return 'Moderate - Sufficient relevant market data found';
-        if (foundCount < 50) return 'Good - Substantial relevant market data found';
+        
+        // Check if we have AI quality scores
+        const itemsWithQualityScores = auctionResults?.filter(item => 
+            typeof (item as any).quality_score === 'number'
+        );
+        
+        if (itemsWithQualityScores && itemsWithQualityScores.length > 0) {
+            // Calculate average quality score
+            const totalQuality = itemsWithQualityScores.reduce((sum, item) => 
+                sum + ((item as any).quality_score || 0), 0
+            );
+            const avgQuality = totalQuality / itemsWithQualityScores.length;
+            
+            console.log(`Average AI quality score: ${avgQuality.toFixed(1)} (from ${itemsWithQualityScores.length} items)`);
+            
+            // Determine quality based on both count and average score
+            if (avgQuality >= 80 && foundCount >= 5) {
+                return 'Excellent - High-quality relevant market data found';
+            }
+            
+            if (avgQuality >= 70) {
+                return foundCount >= 10 
+                    ? 'Very Good - Substantial high-relevance market data found'
+                    : 'Good - Quality relevant market data found';
+            }
+            
+            if (avgQuality >= 50) {
+                return foundCount >= 7
+                    ? 'Good - Substantial relevant market data found'
+                    : 'Moderate - Sufficient relevant market data found';
+            }
+            
+            if (avgQuality >= 30) {
+                return 'Fair - Moderate relevance market data found';
+            }
+            
+            return foundCount < MIN_ITEMS_FOR_GOOD_QUALITY
+                ? `Limited - Only ${foundCount} marginally relevant items found`
+                : 'Limited - Marginally relevant market data found';
+        }
+        
+        // Fallback to count-based quality assessment if no quality scores
+        if (foundCount < MIN_ITEMS_FOR_GOOD_QUALITY) 
+            return `Limited - Only ${foundCount} relevant item(s) found`;
+        if (foundCount < 15) 
+            return 'Moderate - Sufficient relevant market data found';
+        if (foundCount < 50) 
+            return 'Good - Substantial relevant market data found';
         return 'Excellent - Comprehensive relevant market data found';
     }
 } 

@@ -15,6 +15,7 @@ import { MarketDataAggregatorService } from './market-data-aggregator.service.js
 // Removed: CoreStatistics, AdditionalMetrics
 import { StatisticalAnalysisService } from './statistical-analysis.service.js';
 import { MarketReportService } from './market-report.service.js';
+import { assessAuctionResultsQuality } from './utils/quality-assessment.js';
 
 // Removed unused const: MIN_ITEMS_FOR_FULL_STATS
 
@@ -24,6 +25,7 @@ export class StatisticsService {
   private marketDataAggregatorService: MarketDataAggregatorService;
   private statisticalAnalysisService: StatisticalAnalysisService;
   private marketReportService: MarketReportService;
+  private openai: OpenAI;
   
   constructor(openai: OpenAI, valuer: ValuerService) {
     this.marketDataService = new MarketDataService(valuer);
@@ -31,6 +33,7 @@ export class StatisticsService {
     this.marketDataAggregatorService = new MarketDataAggregatorService(this.marketDataService);
     this.statisticalAnalysisService = new StatisticalAnalysisService();
     this.marketReportService = new MarketReportService();
+    this.openai = openai;
   }
   
   /**
@@ -57,6 +60,13 @@ export class StatisticsService {
 
     // 1. Extract Keywords
     const keywords = await this.keywordExtractionService.extractKeywords(text);
+    
+    // Structure keywords by category for inclusion in the response
+    const very_specific = keywords.slice(0, 5);
+    const specific = keywords.slice(5, 15);
+    const moderate = keywords.slice(15, 20);
+    const broad = keywords.slice(20, 25);
+    
     const queryGroups = this.marketDataAggregatorService.groupQueriesBySpecificity(keywords);
 
     // 2. Gather Auction Data (using the new relevance-focused logic)
@@ -67,8 +77,16 @@ export class StatisticsService {
     const searchTime = (Date.now() - startTime) / 1000;
     console.log(`Found ${gatheredAuctionData.length} unique, relevant auction items in ${searchTime.toFixed(1)} seconds`);
 
-    // --- Data Consistency: Use gatheredAuctionData for all subsequent steps --- 
-    const analysisData = gatheredAuctionData; // Use the full set
+    // NEW STEP: Assess quality of auction results using AI
+    const auctionDataWithQuality = await assessAuctionResultsQuality(
+      this.openai,
+      text,
+      value,
+      gatheredAuctionData
+    );
+
+    // --- Data Consistency: Use the quality-assessed data for all subsequent steps --- 
+    const analysisData = auctionDataWithQuality; // Use the full set with quality scores
     const validAnalysisData = analysisData.filter(
         result => result && typeof result.price === 'number' && !isNaN(result.price) && result.price > 0
     );
@@ -79,10 +97,10 @@ export class StatisticsService {
     // Handle cases with insufficient data for full stats
     if (validAnalysisData.length === 0) {
         console.warn("No valid market data found. Returning minimal report.");
-        return this.generateFallbackStatistics(value, analysisData, 'No Data');
+        return this.generateFallbackStatistics(value, analysisData, 'No Data', { very_specific, specific, moderate, broad });
     } else if (!coreStats) { // Implies 1 or 2 valid items found
         console.warn(`Insufficient data (${validAnalysisData.length} items) for full statistical analysis. Returning limited report.`);
-        return this.generateFallbackStatistics(value, analysisData, 'Limited Data');
+        return this.generateFallbackStatistics(value, analysisData, 'Limited Data', { very_specific, specific, moderate, broad });
     }
 
     // --- Proceed with full report generation using the consistent analysisData --- 
@@ -107,7 +125,12 @@ export class StatisticsService {
     // Format comparables using the consistent data (limit applied later by server.ts)
     const comparableSales = this.marketReportService.formatComparableSales(analysisData, value);
     // Use the actual count of gathered items for data quality assessment
-    const dataQuality = this.marketReportService.determineDataQuality(analysisData.length, targetCount);
+    // Pass the auction results with quality scores
+    const dataQuality = this.marketReportService.determineDataQuality(
+      analysisData.length, 
+      targetCount, 
+      auctionDataWithQuality // Pass the quality-scored auction results
+    );
     const targetMarkerPosition = coreStats.price_max > coreStats.price_min 
         ? ((value - coreStats.price_min) / (coreStats.price_max - coreStats.price_min)) * 100 
         : 50; // Center if min=max
@@ -137,6 +160,14 @@ export class StatisticsService {
         provenance_strength: additionalMetrics.provenance_strength,
         // Metadata
         data_quality: dataQuality,
+        // Include search keywords information
+        search_keywords: {
+          very_specific,
+          specific,
+          moderate,
+          broad,
+          total_count: keywords.length
+        }
         // total_count is removed - added by server.ts if it limits comparable_sales
     };
     
@@ -149,11 +180,18 @@ export class StatisticsService {
    * @param targetValue The target value.
    * @param foundData The (potentially empty or very small) list of items found by the aggregator.
    * @param reason The reason for fallback ('No Data' or 'Limited Data').
+   * @param keywordCategories Optional keyword categories to include in the response.
    */
   private generateFallbackStatistics(
       targetValue: number, 
       foundData: SimplifiedAuctionItem[],
-      reason: 'No Data' | 'Limited Data'
+      reason: 'No Data' | 'Limited Data',
+      keywordCategories?: {
+        very_specific: string[];
+        specific: string[];
+        moderate: string[];
+        broad: string[];
+      }
   ): EnhancedStatistics {
       const count = foundData.length;
       const confidence = reason === 'No Data' ? 'Poor - No Data' : `Limited (${count} item${count !== 1 ? 's' : ''})`
@@ -174,7 +212,7 @@ export class StatisticsService {
       const priceMin = validPrices.length > 0 ? Math.round(validPrices[0]) : 0;
       const priceMax = validPrices.length > 0 ? Math.round(validPrices[validPrices.length - 1]) : 0;
 
-      return {
+      const result: EnhancedStatistics = {
         count: count, // Actual count found
         average_price: 0, // Cannot calculate reliably
         median_price: 0, // Cannot calculate reliably
@@ -182,18 +220,32 @@ export class StatisticsService {
         price_max: priceMax,
         standard_deviation: 0, // Cannot calculate reliably
         coefficient_of_variation: 0, // Cannot calculate reliably
-          percentile: count > 0 ? 'N/A' : '50th', 
-          confidence_level: confidence,
-          value: targetValue,
+        percentile: count > 0 ? 'N/A' : '50th', 
+        confidence_level: confidence,
+        value: targetValue,
         price_trend_percentage: '+0.0%', // Cannot calculate trend reliably
-          histogram: defaultHistogram,
-          comparable_sales: defaultComparables, // Show the few items found
+        histogram: defaultHistogram,
+        comparable_sales: defaultComparables, // Show the few items found
         target_marker_position: 50, // Default marker position
-          price_history: defaultHistory,
-          historical_significance: defaultAdditionalMetrics.historical_significance,
-          investment_potential: defaultAdditionalMetrics.investment_potential,
-          provenance_strength: defaultAdditionalMetrics.provenance_strength,
-          data_quality: defaultDataQuality,
+        price_history: defaultHistory,
+        historical_significance: defaultAdditionalMetrics.historical_significance,
+        investment_potential: defaultAdditionalMetrics.investment_potential,
+        provenance_strength: defaultAdditionalMetrics.provenance_strength,
+        data_quality: defaultDataQuality,
       };
+      
+      // Add keyword information if available
+      if (keywordCategories) {
+        result.search_keywords = {
+          ...keywordCategories,
+          total_count: 
+            keywordCategories.very_specific.length + 
+            keywordCategories.specific.length + 
+            keywordCategories.moderate.length + 
+            keywordCategories.broad.length
+        };
+      }
+      
+      return result;
   }
 }

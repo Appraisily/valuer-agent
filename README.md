@@ -1,328 +1,372 @@
-# AI Valuation Justifier & Statistics Service
+# Valuer Agent Backend
 
-An intelligent service that provides detailed justifications and comprehensive statistics for antique and collectible valuations using OpenAI's GPT model and real-time market data.
+A Node.js/Express backend service for antique and collectible item valuation and analysis, leveraging OpenAI language models and auction database integration.
 
-## Tech Stack
+## Overview
 
-- 🚀 Node.js with Express
-- 🔒 Google Cloud Secret Manager for secure API key storage
-- 🤖 OpenAI GPT integration (GPT-4o and o3-mini models)
-- ✨ TypeScript with strict type safety
-- 📊 External Valuer API for Auction Data
-- 🧪 Vitest for testing
-- 🐳 Docker support
+The Valuer Agent Backend provides API endpoints for item valuation, price justification, value range analysis, auction result searches, and enhanced statistical analysis for antiques and collectibles. It connects to an auction database service and uses AI models to analyze and interpret market data.
 
-## Features
+## Core Technologies
 
-- **Valuation Justification:** Analyzes if a proposed value is reasonable based on market data.
-- **Value Estimation:** Calculates a likely market value for an item.
-- **Value Range Analysis:** Provides a likely price range (standard or accurate mode) with confidence levels, market trends, and key factors.
-- **Auction Results:** Retrieves relevant auction results based on keywords and filters.
-- **Enhanced Market Statistics:** Generates comprehensive statistics including price distribution (histogram), historical price trends, comparable sales analysis, and qualitative scores (historical significance, investment potential, provenance strength).
-- **Smart Search Strategies:** Uses AI to generate multi-level search queries for effective market data gathering.
-- **Modular Service Architecture:** Core logic is broken down into specialized services for maintainability.
-- **Secure API Key Management:** Uses Google Cloud Secret Manager.
-- **Asynchronous Operations:** Leverages async/await for non-blocking I/O.
-- **Error Handling:** Centralized error handling middleware.
+- **Node.js/Express**: Backend framework
+- **TypeScript**: Type-safe JavaScript
+- **OpenAI API**: For AI-powered valuation and analysis
+- **Google Cloud Secret Manager**: For secure API key management
+- **Docker**: For containerization and deployment
 
-## Project Structure (Post-Refactoring)
+## Installation and Setup
+
+```bash
+# Clone the repository
+git clone <repository-url>
+
+# Install dependencies
+npm install
+
+# Development mode
+npm run dev
+
+# Build for production
+npm run build
+
+# Start production server
+npm start
+```
+
+## Environment Requirements
+
+The application requires the following environment variables:
+
+- `GOOGLE_CLOUD_PROJECT_ID`: Google Cloud project ID for Secret Manager
+- `PORT`: (Optional) Server port, defaults to 8080
+
+Secrets are managed through Google Cloud Secret Manager. The primary secret required is:
+- `OPENAI_API_KEY`: API key for OpenAI services
+
+## File Structure
 
 ```
-src/
-├── server.ts                      # Express server setup, API routes, middleware
-├── services/
-│   ├── justifier-agent.ts         # Handles value justification, estimation, and range finding logic
-│   ├── keyword-extraction.service.ts # Extracts keywords using AI for searches
-│   ├── market-data-aggregator.service.ts # Gathers and aggregates market data progressively
-│   ├── market-data.ts             # Processes raw market data (potentially part of aggregator or separate)
-│   ├── market-report.service.ts   # Generates histograms, trends, history, comparables
-│   ├── statistical-analysis.service.ts # Calculates core stats and qualitative metrics
-│   ├── valuer.ts                  # Valuer API client/integration
-│   ├── types.ts                   # Shared TypeScript interfaces
-│   ├── prompts/                   # AI prompt templates (standard and accurate)
-│   │   ├── index.ts
-│   │   └── accurate.ts
-│   └── utils/
-│       ├── openai-helper.ts       # Utility for standardized OpenAI API calls
-│       └── tokenizer.ts           # Token management utilities (if still used)
-└── tests/                         # Test suites (needs updates post-refactoring)
+/
+├── dist/                # Compiled output
+├── src/
+│   ├── server.ts        # Main Express server setup
+│   ├── services/        # Core service modules
+│   │   ├── justifier-agent.ts      # Valuation justification agent
+│   │   ├── justifier.ts            # Justification logic
+│   │   ├── keyword-extraction.service.ts # Keyword extraction for searches
+│   │   ├── market-data-aggregator.service.ts # Aggregates market data
+│   │   ├── market-data.ts          # Market data fetching service
+│   │   ├── market-report.service.ts # Market report generation
+│   │   ├── statistical-analysis.service.ts # Statistical analysis
+│   │   ├── statistics-service.ts   # Enhanced statistics service
+│   │   ├── types.ts                # Type definitions
+│   │   ├── valuer.ts               # Core valuation service
+│   │   ├── prompts/               # AI prompts
+│   │   └── utils/                 # Utility functions
+│   ├── tests/           # Test files
+│   └── App.tsx          # Frontend app component (not used in backend)
+├── Dockerfile           # Docker configuration
+├── tsconfig.json        # TypeScript configuration
+└── package.json         # Project dependencies and scripts
 ```
+
+## Core Classes
+
+### ValuerService
+
+The primary service for interfacing with the auction database API.
+
+**Key Methods:**
+- `search(query: string, minPrice?: number, maxPrice?: number, limit?: number)`: Searches auction database with filters
+- `findValuableResults(keyword: string, minPrice: number, limit: number)`: Finds valuable auction results with refinement logic
+- `findSimilarItems(description: string, targetValue?: number)`: Finds items similar to a description
+
+### JustifierAgent
+
+An AI-powered agent for justifying valuations and finding value ranges.
+
+**Key Methods:**
+- `justify(text: string, value: number)`: Justifies a valuation against market data
+- `findValue(text: string)`: Determines a value for an item based on its description
+- `findValueRange(text: string, useAccurateModel: boolean)`: Finds a value range with confidence levels
+
+### StatisticsService
+
+Generates enhanced statistical analysis of market data.
+
+**Key Methods:**
+- `generateStatistics(text: string, value: number, targetCount: number, minPrice?: number, maxPrice?: number)`: Creates comprehensive statistical analysis
+
+### MarketDataService
+
+Retrieves and processes market data for analysis.
+
+**Key Methods:**
+- `searchMarketData(searchTerms: string[], targetValue?: number, isForJustification?: boolean, minRelevance?: number)`: Executes multiple searches and aggregates results
 
 ## API Endpoints
 
-All endpoints accept `POST` requests with a JSON body.
+### POST /api/justify
+Justifies a valuation based on item description and proposed value.
 
-### 1. `/api/justify`
-
-Analyzes whether a proposed value for an item description is reasonable based on market data.
-
-**Request Body:**
+**Request Schema:**
 ```json
 {
-  "text": "<Item Description (string)>",
-  "value": <Proposed Value (number)>
+  "text": "string",
+  "value": "number"
 }
 ```
 
-**Success Response (200 OK):**
+**Response:**
 ```json
 {
   "success": true,
-  "explanation": "<Concise justification text>",
-  "auctionResults": [ <Array of SimplifiedAuctionItem> ],
-  "allSearchResults": [ <Array of MarketDataResult> ] // Raw results from internal searches
+  "explanation": "string",
+  "auctionResults": [...],
+  "allSearchResults": [...]
 }
 ```
 
-**Error Response (4xx/5xx):** Standard error format (see Error Handling).
+### POST /api/find-value
+Determines a value for an item based on its description.
 
-### 2. `/api/find-value`
-
-Estimates a likely market value for a given item description.
-
-**Request Body:**
+**Request Schema:**
 ```json
 {
-  "text": "<Item Description (string)>"
+  "text": "string"
 }
 ```
 
-**Success Response (200 OK):**
+**Response:**
 ```json
 {
   "success": true,
-  "value": <Calculated Value (number)>,
-  "explanation": "<Explanation text>"
+  "value": "number",
+  "explanation": "string"
 }
 ```
 
-**Error Response (4xx/5xx):** Standard error format.
+### POST /api/find-value-range
+Finds a value range with confidence levels.
 
-### 3. `/api/find-value-range`
-
-Provides a market value range estimation for an item description. Supports standard (broader range) and accurate (narrower range, uses GPT-4o) modes.
-
-**Request Body:**
+**Request Schema:**
 ```json
 {
-  "text": "<Item Description (string)>",
-  "useAccurateModel": <boolean (optional, default: false)>
+  "text": "string",
+  "useAccurateModel": "boolean" (optional)
 }
 ```
 
-**Success Response (200 OK):**
+**Response:**
 ```json
 {
   "success": true,
-  "minValue": <number>,
-  "maxValue": <number>,
-  "mostLikelyValue": <number>,
-  "explanation": "<Explanation text>",
-  "auctionResults": [ <Array of AuctionItemWithRelevance> ], // Comparable items considered
-  "confidenceLevel": <number (e.g., 70)>,
-  "marketTrend": <"rising" | "stable" | "declining">,
-  "keyFactors": [ <Array of string> ],
-  "dataQuality": <"high" | "medium" | "low">
+  "minValue": "number",
+  "maxValue": "number",
+  "mostLikelyValue": "number",
+  "explanation": "string",
+  "auctionResults": [...],
+  "confidenceLevel": "number",
+  "marketTrend": "rising|stable|declining",
+  "keyFactors": [...],
+  "dataQuality": "high|medium|low"
 }
 ```
 
-**Error Response (4xx/5xx):** Standard error format.
+### POST /api/auction-results
+Retrieves auction results for a keyword.
 
-### 4. `/api/auction-results`
-
-Retrieves relevant auction results for a keyword, sorted by price (descending).
-
-**Request Body:**
+**Request Schema:**
 ```json
 {
-  "keyword": "<Search Keyword (string)>",
-  "minPrice": <number (optional, default: 1000)>,
-  "limit": <number (optional, default: 10)>
+  "keyword": "string",
+  "minPrice": "number" (optional),
+  "limit": "number" (optional)
 }
 ```
 
-**Success Response (200 OK):**
+**Response:**
 ```json
 {
   "success": true,
-  "keyword": "<string>",
-  "totalResults": <number>,
-  "minPrice": <number>,
-  "auctionResults": [
-    {
-      "title": "<string>",
-      "price": { "amount": <number>, "currency": "<string>", "symbol": "<string>" },
-      "auctionHouse": "<string>", // Note: uses 'auctionHouse' key
-      "date": "<string>",
-      "lotNumber": "<string>",
-      "saleType": "<string>"
-    }
-    // ... more results
-  ]
+  "keyword": "string",
+  "totalResults": "number",
+  "minPrice": "number",
+  "auctionResults": [...]
 }
 ```
 
-**Error Response (4xx/5xx):** Standard error format.
+### POST /api/wp2hugo-auction-results
+Retrieves auction results in WordPress-Hugo compatible format.
 
-### 5. `/api/wp2hugo-auction-results`
-
-Similar to `/api/auction-results` but provides additional summary information and slightly different formatting (e.g., `house` key instead of `auctionHouse`) specifically for the WP2HUGO workflow.
-
-**Request Body:**
+**Request Schema:**
 ```json
 {
-  "keyword": "<Search Keyword (string)>",
-  "minPrice": <number (optional, default: 1000)>,
-  "limit": <number (optional, default: 10)>
+  "keyword": "string",
+  "minPrice": "number" (optional),
+  "limit": "number" (optional)
 }
 ```
 
-**Success Response (200 OK):**
+**Response:**
 ```json
 {
   "success": true,
-  "keyword": "<string>",
-  "totalResults": <number>,
-  "minPrice": <number>,
-  "auctionResults": [
-     {
-      "title": "<string>",
-      "price": { "amount": <number>, "currency": "<string>", "symbol": "<string>" },
-      "house": "<string>", // Note: uses 'house' key
-      "date": "<string>",
-      "lotNumber": "<string>",
-      "saleType": "<string>"
-    }
-    // ... more results
-  ],
-  "summary": "<Generated market summary text>",
+  "keyword": "string",
+  "totalResults": "number",
+  "minPrice": "number",
+  "auctionResults": [...],
+  "summary": "string",
   "priceRange": {
-    "min": <number>,
-    "max": <number>,
-    "median": <number>
+    "min": "number",
+    "max": "number",
+    "median": "number"
   },
-  "timestamp": "<ISO 8601 string>"
+  "timestamp": "string"
 }
 ```
 
-**Error Response (4xx/5xx):** Returns a specific error format for this endpoint:
+### POST /api/enhanced-statistics
+Generates comprehensive statistical analysis of market data.
+
+**Request Schema:**
 ```json
 {
-  "success": false,
-  "keyword": "<string>",
-  "error": "<Error message>",
-  "auctionResults": [],
-  "timestamp": "<ISO 8601 string>"
+  "text": "string",
+  "value": "number",
+  "limit": "number" (optional),
+  "targetCount": "number" (optional),
+  "minPrice": "number" (optional),
+  "maxPrice": "number" (optional)
 }
 ```
 
-### 6. `/api/enhanced-statistics`
-
-Generates a comprehensive statistical report for an item, including distribution, trends, comparables, and qualitative scores.
-
-**Request Body:**
-```json
-{
-  "text": "<Item Description (string)>",
-  "value": <Target Value for analysis (number)>,
-  "limit": <number (optional, default: 20)>,
-  "targetCount": <number (optional, default: 100)>,
-  "minPrice": <number (optional)>,
-  "maxPrice": <number (optional)>
-}
-```
-*   `limit`: Controls the maximum number of `comparable_sales` returned in the response.
-*   `targetCount`: Aim for this many auction results during internal data gathering.
-*   `minPrice`/`maxPrice`: Filters the auction data used for statistics calculation.
-
-**Success Response (200 OK):**
+**Response:**
 ```json
 {
   "success": true,
-  "statistics": { <EnhancedStatistics object - see types.ts> },
-  "message": "Enhanced statistics generated successfully"
+  "statistics": {
+    "count": "number",
+    "average_price": "number",
+    "median_price": "number",
+    "price_min": "number",
+    "price_max": "number",
+    "standard_deviation": "number",
+    "coefficient_of_variation": "number",
+    "percentile": "string",
+    "confidence_level": "string",
+    "price_trend_percentage": "string",
+    "histogram": [...],
+    "comparable_sales": [...],
+    "value": "number",
+    "target_marker_position": "number",
+    "total_count": "number",
+    "price_history": [...],
+    "historical_significance": "number",
+    "investment_potential": "number",
+    "provenance_strength": "number",
+    "data_quality": "string"
+  },
+  "message": "string"
 }
 ```
-*   See `src/services/types.ts` for the detailed structure of the `EnhancedStatistics` object.
 
-**Error Response (4xx/5xx):** Standard error format.
+## Type Definitions
 
-### Error Handling
-
-Failed requests (e.g., validation errors, internal server errors) generally return a standard JSON response:
-
-```json
-{
-  "success": false,
-  "error": "<Error message string>",
-  // "details": [ ... ] // Optional: Included for Zod validation errors
+### AuctionItemWithRelevance
+```typescript
+interface AuctionItemWithRelevance {
+  title: string;
+  price: number;
+  currency: string;
+  house: string;
+  date: string;
+  description?: string;
+  diff?: string;
+  is_current?: boolean;
+  relevanceScore?: number;
+  adjustmentFactor?: number;
+  relevanceReason?: string;
 }
 ```
-*(Exception: `/api/wp2hugo-auction-results` has its own error format, see above)*
 
-## Setup
-
-1.  **Prerequisites:** Node.js (v18+ recommended), npm
-2.  **Clone:** `git clone <repository-url>`
-3.  **Install Dependencies:** `cd <repository-directory> && npm install`
-4.  **Environment Variables:**
-    *   Create a `.env` file in the root directory.
-    *   Add the following variables:
-        ```
-        PORT=8080
-        GOOGLE_CLOUD_PROJECT_ID=<your-gcp-project-id>
-        ```
-5.  **Google Cloud Setup:**
-    *   Ensure you have a Google Cloud project with the Secret Manager API enabled.
-    *   Store your OpenAI API key in Secret Manager with the secret ID `OPENAI_API_KEY`.
-    *   Ensure the service account or user running the application has the `Secret Manager Secret Accessor` role (`roles/secretmanager.secretAccessor`).
-    *   [Application Default Credentials (ADC)](https://cloud.google.com/docs/authentication/provide-credentials-adc) should be configured in your environment (e.g., via `gcloud auth application-default login` or service account keys).
-
-## Running the Service
-
--   **Development:** `npm run dev` (Starts with `tsx` for hot-reloading)
--   **Production:**
-    1.  `npm run build` (Compiles TypeScript to JavaScript in `dist/`)
-    2.  `npm start` (Runs the compiled code from `dist/`)
-
-## Key Service Components (Post-Refactoring)
-
--   **`ValuerService`:** Client for fetching raw auction data from the external Valuer API.
--   **`KeywordExtractionService`:** Uses OpenAI to generate relevant search terms based on item descriptions.
--   **`MarketDataService`:** (May need refactoring/merging) Processes raw data from Valuer API into a standardized `SimplifiedAuctionItem` format.
--   **`MarketDataAggregatorService`:** Orchestrates progressive searches across different keyword specificities using `MarketDataService` to gather a target number of relevant items.
--   **`StatisticalAnalysisService`:** Calculates core statistical metrics (mean, median, stddev, etc.) and derived qualitative scores.
--   **`MarketReportService`:** Generates user-facing report components like histograms, price history trends, formatted comparable sales lists, and data quality indicators.
--   **`JustifierAgent`:** Handles endpoints related to direct value justification, estimation, and range finding. Uses `MarketDataService`, `OpenAI Helper`, and potentially `KeywordExtractionService`.
--   **`StatisticsService` (Facade):** Handles the `/api/enhanced-statistics` endpoint by orchestrating calls to the various underlying services (`KeywordExtraction`, `MarketDataAggregator`, `StatisticalAnalysis`, `MarketReport`).
--   **`OpenAI Helper`:** Utility functions for making standardized calls to the OpenAI API and parsing responses.
-
-## Testing
-
-Run the test suite:
-```bash
-npm test
+### EnhancedStatistics
+```typescript
+interface EnhancedStatistics {
+  count: number;
+  average_price: number;
+  median_price: number;
+  price_min: number;
+  price_max: number;
+  standard_deviation: number;
+  coefficient_of_variation: number;
+  percentile: string;
+  confidence_level: string;
+  price_trend_percentage: string;
+  histogram: HistogramBucket[];
+  comparable_sales: FormattedAuctionItem[];
+  value: number;
+  target_marker_position: number;
+  total_count?: number;
+  price_history: PriceHistoryPoint[];
+  historical_significance: number;
+  investment_potential: number;
+  provenance_strength: number;
+  data_quality?: string;
+}
 ```
-*Note: Tests may need significant updates to reflect the refactored service architecture.*
 
-## Docker Support
-
-Build and run with Docker:
-
-```bash
-docker build -t valuation-service .
-docker run -p 8080:8080 --env-file .env valuation-service
+### ValueRangeResponse
+```typescript
+interface ValueRangeResponse {
+  minValue: number;
+  maxValue: number;
+  mostLikelyValue: number;
+  explanation: string;
+  auctionResults: AuctionItemWithRelevance[];
+  confidenceLevel: number;
+  marketTrend: 'rising' | 'stable' | 'declining';
+  keyFactors?: string[];
+  dataQuality?: 'high' | 'medium' | 'low';
+}
 ```
-*Ensure your `.env` file is present or configure environment variables appropriately for the container.*
 
-## Scripts
+## Processing Flow
 
--   `npm run dev`: Start development server with hot reload.
--   `npm run build`: Build for production (compiles TS to JS).
--   `npm start`: Start production server (runs JS from `dist/`).
--   `npm test`: Run Vitest test suite.
--   `npm run lint`: Run ESLint code linter.
+1. **API Request Handling**: Express routes receive client requests and validate using Zod schemas
+2. **Secret Management**: OpenAI key fetched securely from Google Cloud Secret Manager
+3. **Keyword Extraction**: AI extracts optimal search keywords from item descriptions
+4. **Market Data Retrieval**: ValuerService fetches auction results based on keywords
+5. **Data Analysis**: 
+   - JustifierAgent analyzes market data and generates value justifications
+   - StatisticsService calculates comprehensive market statistics
+6. **Error Handling**: Structured error handling with appropriate HTTP status codes
 
-## License
+## Deployment
 
-MIT License - see LICENSE file for details.
+The application is containerized using Docker and deployed to Google Cloud Run:
+
+1. Build the Docker image: `docker build -t valuer-agent .`
+2. Deploy to Cloud Run: `gcloud run deploy valuer-agent --image=valuer-agent`
+
+The Cloud Run service must have access to Secret Manager to retrieve API keys.
+
+## Error Handling
+
+The application uses Express middleware for centralized error handling:
+- Zod validation errors return 400 Bad Request
+- API errors use appropriate HTTP status codes
+- All errors include structured JSON response with error details
+
+## Security
+
+- API Keys are stored in Google Cloud Secret Manager, not in code
+- Input validation on all endpoints using Zod schemas
+- Express security best practices including proper error handling
+
+## Development Workflow
+
+1. Make changes to TypeScript files in the `src` directory
+2. Run tests: `npm test`
+3. Build: `npm run build`
+4. Deploy: Push to the deployment branch to trigger CI/CD
