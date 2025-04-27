@@ -123,10 +123,22 @@ export class StatisticsService {
     // Handle cases with insufficient data for full stats
     if (validAnalysisData.length === 0) {
         console.warn("No valid market data found. Returning minimal report.");
-        return this.generateFallbackStatistics(value, analysisData, 'No Data', { very_specific, specific, moderate, broad });
+        const keywordCategories = {
+          very_specific: very_specific.map(keyword => ({keyword, count: keywordCounts.get(keyword) || 0})),
+          specific: specific.map(keyword => ({keyword, count: keywordCounts.get(keyword) || 0})),
+          moderate: moderate.map(keyword => ({keyword, count: keywordCounts.get(keyword) || 0})),
+          broad: broad.map(keyword => ({keyword, count: keywordCounts.get(keyword) || 0})),
+        };
+        return this.generateFallbackStatistics(value, analysisData, 'No Data', keywordCategories);
     } else if (!coreStats) { // Implies 1 or 2 valid items found
         console.warn(`Insufficient data (${validAnalysisData.length} items) for full statistical analysis. Returning limited report.`);
-        return this.generateFallbackStatistics(value, analysisData, 'Limited Data', { very_specific, specific, moderate, broad });
+        const keywordCategories = {
+          very_specific: very_specific.map(keyword => ({keyword, count: keywordCounts.get(keyword) || 0})),
+          specific: specific.map(keyword => ({keyword, count: keywordCounts.get(keyword) || 0})),
+          moderate: moderate.map(keyword => ({keyword, count: keywordCounts.get(keyword) || 0})),
+          broad: broad.map(keyword => ({keyword, count: keywordCounts.get(keyword) || 0})),
+        };
+        return this.generateFallbackStatistics(value, analysisData, 'Limited Data', keywordCategories);
     }
 
     // --- Proceed with full report generation using the consistent analysisData --- 

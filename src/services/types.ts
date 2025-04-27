@@ -147,4 +147,5 @@ export interface QueryGroups {
   'moderate': string[];
   'broad': string[];
   'very broad': string[];
+  [key: string]: string[]; // Add index signature to allow string indexing
 }
