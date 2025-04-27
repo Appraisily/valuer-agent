@@ -78,13 +78,13 @@ Example format:
       model: "o3-mini", // Specified model as requested
       messages: [
         { 
-          role: "system", 
+          role: "assistant", // Changed from "system" to "assistant" as required
           content: "You are an expert in art and antiques valuation with deep knowledge of auction markets. Your task is to assess the relevance/quality of auction results for a specific item valuation." 
         },
         { role: "user", content: prompt }
       ],
-      response_format: { type: "json_object" },
-      temperature: 0.2 // Low temperature for more consistent results
+      response_format: { type: "json_object" }
+      // Removed temperature parameter which is not supported by o3-mini
     });
 
     // Extract the response
