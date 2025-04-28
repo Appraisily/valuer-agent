@@ -17,71 +17,81 @@ export class KeywordExtractionService {
 Generate multiple levels of search queries for finding comparable auction items for:
 "${text}"
 
-Create a JSON array of search query strings (exactly 25 queries) at different specificity levels as follows:
-1. Very specific queries (5 queries, 5-6+ words) exactly matching the item description.
-2. Specific queries (10 queries, 3-4 words) focusing on key identifying features.
-3. Moderate queries (5 queries, 2 words) capturing the item category and main characteristic.
-4. Broad queries (5 queries, 1 word) for the general category.
+Create a JSON object with the following structure:
+{
+  "result": [
+    // 5 Very specific queries (exact phrases that might match the item description)
+    // 10 Specific queries (key identifying features)
+    // 5 Moderate queries (category and main characteristic)
+    // 5 Broad queries (general category)
+  ]
+}
 
-Ensure exactly 5 very specific, 10 specific, 5 moderate, and 5 broad queries are returned in that order.
-Response MUST be only a valid JSON array of strings.
+IMPORTANT: 
+- Each keyword or phrase should be an actual auction search term
+- Avoid hyphenated terms like "Impressionist-Style" - use separate words instead (e.g., "Impressionist Style")
+- When referencing art styles, artists, materials, etc., use common terminology found in auction catalogs
+- Return ONLY a valid JSON object with the exact structure shown above - no explanation or additional text
 
-Example response format for "Antique Meissen Porcelain Tea Set with Floral Design, circa 1880":
-[
-  // 5 Very specific queries (5-6+ words)
-  "Antique Meissen Porcelain Tea Set Floral 1880",
-  "Meissen Porcelain Tea Set Floral Design",
-  "Antique Meissen Tea Set Floral 1880",
-  "Meissen Porcelain Floral Tea Set 1880",
-  "Antique 1880 Meissen Porcelain Tea Set",
-  
-  // 10 Specific queries (3-4 words)
-  "Meissen Porcelain Tea",
-  "Meissen Floral Set",
-  "Antique Meissen Porcelain",
-  "Porcelain Tea Set",
-  "Meissen Tea Set",
-  "Antique Tea Set",
-  "Floral Porcelain Set",
-  "Meissen Floral Porcelain",
-  "Antique Porcelain 1880",
-  "Porcelain Floral Design",
-  
-  // 5 Moderate queries (2 words)
-  "Meissen Porcelain",
-  "Antique Porcelain",
-  "Tea Set",
-  "Floral Porcelain",
-  "Antique Meissen",
-  
-  // 5 Broad queries (1 word)
-  "Meissen",
-  "Porcelain",
-  "Antique",
-  "Tea",
-  "Floral"
-]`;
+Example response format for "Salvador Dali Impressionist Rural Landscape":
+{
+  "result": [
+    "Salvador Dali Impressionist Rural Landscape Painting",
+    "Dali Impressionist Style Landscape Art Piece",
+    "Salvador Dali Impressionist Landscape Drawing",
+    "Dali Rural Landscape Impressionist Painting",
+    "Salvador Dali Impressionist Style Rural Artwork",
+    "Salvador Dali Impressionist",
+    "Dali Rural Landscape",
+    "Impressionist Rural Art",
+    "Dali Impressionist Art",
+    "Rural Landscape Art",
+    "Impressionist Salvador Dali",
+    "Impressionist Style Painting",
+    "Dali Landscape Painting",
+    "Rural Landscape Painting",
+    "Dali Impressionist Drawing",
+    "Dali Impressionist",
+    "Rural Landscape",
+    "Impressionist Art",
+    "Landscape Painting",
+    "Dali Art",
+    "Impressionist",
+    "Landscape",
+    "Salvador",
+    "Dali",
+    "Art"
+  ]
+}`;
 
     try {
-        // Use a more capable model for potentially better query generation
-        const keywords = await callOpenAIAndParseJson<string[]>(this.openai, {
+        // Use a more capable model for better query generation
+        const response = await callOpenAIAndParseJson<{result: string[]}>(this.openai, {
             model: "gpt-4o", 
-            systemMessage: "You are an expert in auction terminology, art, antiques, and collectibles categorization. Generate optimal search queries for finding comparable auction items, returning ONLY a valid JSON array of strings with exactly 5 very specific, 10 specific, 5 moderate, and 5 broad queries.",
+            systemMessage: "You are an expert in auction terminology, art, antiques, and collectibles categorization. Generate optimal search queries for finding comparable auction items, returning ONLY a valid JSON object with the exact structure requested.",
             userPrompt: prompt,
             expectJsonResponse: true
         });
 
-        if (!Array.isArray(keywords) || keywords.length === 0) {
+        if (!response || !response.result || !Array.isArray(response.result) || response.result.length === 0) {
           throw new Error('Invalid or empty keyword array returned by AI');
         }
 
-        // Enforce the structured distribution even if AI doesn't follow instructions perfectly
-        const structuredKeywords = this.enforceKeywordStructure(keywords);
+        // Ensure we have exactly 25 keywords
+        let keywords = response.result;
+        if (keywords.length > 25) {
+          keywords = keywords.slice(0, 25);
+        } else if (keywords.length < 25) {
+          const shortfall = 25 - keywords.length;
+          for (let i = 0; i < shortfall; i++) {
+            keywords.push(`Keyword ${keywords.length + 1}`);
+          }
+        }
 
         // Log the structured queries by specificity level
-        this.logKeywordsBySpecificity(structuredKeywords);
+        this.logKeywordsBySpecificity(keywords);
 
-        return structuredKeywords;
+        return keywords;
 
     } catch (error) {
       console.error('Error extracting keywords with AI:', error);
@@ -91,67 +101,8 @@ Example response format for "Antique Meissen Porcelain Tea Set with Floral Desig
   }
 
   /**
-   * Enforces the required distribution of keywords by specificity
-   * @param keywords Array of keywords returned by AI
-   * @returns Structured array with exactly 5 very specific, 10 specific, 5 moderate, and 5 broad queries
+   * Logs the extracted keywords organized by specificity level
    */
-  private enforceKeywordStructure(keywords: string[]): string[] {
-    // Group keywords by word count
-    const verySpecific: string[] = [];
-    const specific: string[] = [];
-    const moderate: string[] = [];
-    const broad: string[] = [];
-    
-    // Sort all keywords into appropriate categories
-    for (const keyword of keywords) {
-      const wordCount = keyword.split(' ').length;
-      
-      if (wordCount >= 5) {
-        verySpecific.push(keyword);
-      } else if (wordCount >= 3 && wordCount <= 4) {
-        specific.push(keyword);
-      } else if (wordCount === 2) {
-        moderate.push(keyword);
-      } else if (wordCount === 1) {
-        broad.push(keyword);
-      }
-    }
-    
-    // Select required number from each category, or generate if insufficient
-    const result: string[] = [
-      ...this.ensureCategoryCount(verySpecific, 5, 5), 
-      ...this.ensureCategoryCount(specific, 10, 3),
-      ...this.ensureCategoryCount(moderate, 5, 2),
-      ...this.ensureCategoryCount(broad, 5, 1)
-    ];
-    
-    return result;
-  }
-  
-  /**
-   * Ensures each category has the required number of items
-   * @param items Current items in the category
-   * @param requiredCount Number of items required
-   * @param targetWordCount Target word count for this category
-   * @returns Array with exactly requiredCount items
-   */
-  private ensureCategoryCount(items: string[], requiredCount: number, targetWordCount: number): string[] {
-    // If we have more than needed, take the first requiredCount
-    if (items.length >= requiredCount) {
-      return items.slice(0, requiredCount);
-    }
-    
-    // If we have fewer than needed, fill with generic placeholders
-    const result = [...items];
-    const shortfall = requiredCount - items.length;
-    
-    for (let i = 0; i < shortfall; i++) {
-      result.push(`Category ${targetWordCount} term ${i+1}`);
-    }
-    
-    return result;
-  }
-
   private logKeywordsBySpecificity(keywords: string[]): void {
     console.log('Extracted search queries by specificity:');
     // Based on our enforced structure, we know exactly where each category begins and ends

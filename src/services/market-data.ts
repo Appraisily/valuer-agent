@@ -1,6 +1,6 @@
 import { SimplifiedAuctionItem, MarketDataResult } from './types.js';
 import { ValuerService } from './valuer.js';
-import { estimateTokens, trimDescription, MAX_AVAILABLE_TOKENS } from './utils/tokenizer.js';
+import { estimateTokens, trimDescription, MAX_AVAILABLE_TOKENS, MAX_DESCRIPTION_LENGTH } from './utils/tokenizer.js';
 
 export class MarketDataService {
   constructor(private valuer: ValuerService) {}
@@ -21,56 +21,14 @@ export class MarketDataService {
         currency: item.currencyCode || 'USD',
         house: item.houseName || 'Unknown',
         date: item.dateTimeLocal?.split('T')[0] || 'Unknown',
-        description: item.lotDescription || ''
+        description: trimDescription(item.lotDescription || '')
       }));
 
-    // For comprehensive statistics, we may need many more items
-    // Calculate token budget based on whether we're gathering many items or just a few
-    const shouldGatherMany = items.length > 30;
-    const targetItemCount = shouldGatherMany ? 100 : 15;
-    const maxItemsToProcess = Math.min(items.length, targetItemCount);
+    // Simple approach - limit the maximum number of items we process
+    const MAX_ITEMS = 100;
+    const result = items.slice(0, MAX_ITEMS);
     
-    // Adjust token allocation based on collection size
-    // For larger collections, we use less tokens per item to fit more items
-    // For smaller collections, we allocate more tokens per item for better analysis
-    const tokensPerItemBudget = shouldGatherMany 
-      ? Math.floor(MAX_AVAILABLE_TOKENS / maxItemsToProcess * 0.8) // 80% of token budget for many items
-      : Math.floor(MAX_AVAILABLE_TOKENS / maxItemsToProcess);      // Full token budget for few items
-    
-    console.log(`Processing ${maxItemsToProcess} items with ${tokensPerItemBudget} tokens per item budget`);
-    
-    let totalTokens = 0;
-    const result: SimplifiedAuctionItem[] = [];
-
-    for (const item of items) {
-      // For larger datasets, we aggressively trim descriptions to fit more items
-      const descriptionBudget = shouldGatherMany 
-        ? Math.min(100, tokensPerItemBudget / 3)   // Limit description tokens for large datasets
-        : tokensPerItemBudget / 2;                 // More generous for small datasets
-        
-      const description = trimDescription(item.description, descriptionBudget);
-      const newItem = { ...item, description };
-      
-      const itemTokens = estimateTokens(JSON.stringify(newItem) + '\n');
-      
-      // Stop adding items if we exceed token budget
-      if (totalTokens + itemTokens > MAX_AVAILABLE_TOKENS) {
-        console.log(`Token limit reached (${totalTokens}/${MAX_AVAILABLE_TOKENS}) after ${result.length} items`);
-        break;
-      }
-      
-      result.push(newItem);
-      totalTokens += itemTokens;
-      
-      // If we're collecting a large dataset, continue until we reach our target
-      // Otherwise stop at 15 items as before
-      if (result.length >= maxItemsToProcess) {
-        console.log(`Reached target item count: ${maxItemsToProcess}`);
-        break;
-      }
-    }
-
-    console.log(`Simplified ${result.length} auction items, using ${totalTokens} tokens`);
+    console.log(`Simplified ${result.length} auction items`);
     return result;
   }
 

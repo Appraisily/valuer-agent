@@ -1,21 +1,12 @@
 import OpenAI from 'openai';
 import { ValuerService } from './valuer.js';
+import { trimDescription, MAX_DESCRIPTION_LENGTH } from './utils/tokenizer.js';
 
 interface MarketDataResult {
   query: string;
   data: SimplifiedAuctionItem[];
   relevance?: string;
 }
-
-// Rough token estimation based on GPT tokenization rules
-function estimateTokens(text: string): number {
-  // GPT models typically use ~4 characters per token on average
-  return Math.ceil(text.length / 4);
-}
-
-const TOKEN_LIMIT = 60000;
-const TOKENS_RESERVED = 10000; // Reserve tokens for model reasoning and prompt
-const MAX_AVAILABLE_TOKENS = TOKEN_LIMIT - TOKENS_RESERVED;
 
 interface SimplifiedAuctionItem {
   title: string;
@@ -32,25 +23,8 @@ export class JustifierAgent {
     private valuer: ValuerService
   ) {}
 
-  private trimItemDescription(description: string, maxTokens: number): string {
-    if (!description) return '';
-    const currentTokens = estimateTokens(description);
-    if (currentTokens <= maxTokens) return description;
-    
-    // Trim to approximate token length while keeping whole sentences
-    const approxCharLimit = maxTokens * 4;
-    const sentences = description.split(/[.!?]+/);
-    let result = '';
-    let totalChars = 0;
-    
-    for (const sentence of sentences) {
-      const nextLength = totalChars + sentence.length;
-      if (nextLength > approxCharLimit) break;
-      result += sentence + '.';
-      totalChars = nextLength;
-    }
-    
-    return result;
+  private trimItemDescription(description: string): string {
+    return trimDescription(description);
   }
 
   private simplifyAuctionData(data: any): SimplifiedAuctionItem[] {
@@ -75,32 +49,11 @@ export class JustifierAgent {
         currency: item.currencyCode || 'USD',
         house: item.houseName || 'Unknown',
         date: item.dateTimeLocal?.split(' ')[0] || 'Unknown', // Only keep the date part
-        description: item.lotDescription || ''
+        description: this.trimItemDescription(item.lotDescription || '')
       }));
 
-    // Start with a small number of items and gradually add more until we approach the token limit
-    let totalTokens = 0;
-    const result: SimplifiedAuctionItem[] = [];
-    const maxTokensPerItem = Math.floor(MAX_AVAILABLE_TOKENS / Math.min(items.length, 15));
-
-    for (const item of items) {
-      // Trim description to fit within per-item token budget
-      item.description = this.trimItemDescription(item.description, maxTokensPerItem / 2);
-      
-      const itemTokens = estimateTokens(
-        JSON.stringify(item) + '\n' // Include formatting overhead
-      );
-      
-      if (totalTokens + itemTokens > MAX_AVAILABLE_TOKENS) break;
-      
-      result.push(item);
-      totalTokens += itemTokens;
-      
-      // Stop after 15 items to ensure we have a good variety without overwhelming
-      if (result.length >= 15) break;
-    }
-
-    return result;
+    // Limit to 15 items max for justification purposes
+    return items.slice(0, 15);
   }
 
   private async getSearchStrategy(text: string, value: number): Promise<string[]> {

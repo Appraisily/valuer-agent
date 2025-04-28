@@ -7,16 +7,28 @@ import { JustifierAgent } from './services/justifier-agent.js';
 import { StatisticsService } from './services/statistics-service.js';
 
 async function getOpenAIKey() {
-  const client = new SecretManagerServiceClient();
-  const projectId = process.env.GOOGLE_CLOUD_PROJECT_ID;
-  if (!projectId) {
-    throw new Error('GOOGLE_CLOUD_PROJECT_ID environment variable is not set');
+  // For local development, check if direct API key is provided
+  if (process.env.OPENAI_API_KEY) {
+    console.log('Using OPENAI_API_KEY from environment variables');
+    return process.env.OPENAI_API_KEY;
   }
   
-  const name = `projects/${projectId}/secrets/OPENAI_API_KEY/versions/latest`;
-  
-  const [version] = await client.accessSecretVersion({ name });
-  return version.payload?.data?.toString() || '';
+  // For Cloud Run, use Secret Manager
+  try {
+    const client = new SecretManagerServiceClient();
+    const projectId = process.env.GOOGLE_CLOUD_PROJECT_ID;
+    if (!projectId) {
+      throw new Error('GOOGLE_CLOUD_PROJECT_ID environment variable is not set');
+    }
+    
+    const name = `projects/${projectId}/secrets/OPENAI_API_KEY/versions/latest`;
+    
+    const [version] = await client.accessSecretVersion({ name });
+    return version.payload?.data?.toString() || '';
+  } catch (error) {
+    console.error('Error fetching OpenAI API key from Secret Manager:', error);
+    throw error;
+  }
 }
 
 const app = express();
@@ -371,9 +383,10 @@ const port = process.env.PORT || 8080;
 // Initialize OpenAI before starting server
 initializeOpenAI().then(() => {
   app.listen(port, () => {
-  console.log(`Server running on port ${port}`);
+    console.log(`Server running on port ${port}`);
   });
 }).catch(error => {
   console.error('Failed to initialize OpenAI client:', error);
+  console.error('Make sure either GOOGLE_CLOUD_PROJECT_ID is set for Secret Manager OR OPENAI_API_KEY is provided directly');
   process.exit(1);
 });
