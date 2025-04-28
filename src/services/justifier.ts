@@ -1,6 +1,6 @@
 import OpenAI from 'openai';
 import { ValuerService } from './valuer.js';
-import { trimDescription, MAX_DESCRIPTION_LENGTH } from './utils/tokenizer.js';
+import { trimDescription } from './utils/tokenizer.js';
 
 interface MarketDataResult {
   query: string;
