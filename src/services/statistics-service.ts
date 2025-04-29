@@ -103,12 +103,40 @@ export class StatisticsService {
       return this.generateFallbackStatistics(value, gatheredAuctionData, 'Limited Data', keywordCategories);
     }
 
+    // Convert QueryGroups to MarketDataResult format for assessAuctionResultsQuality
+    const queryGroupsAsResults = Object.entries(queryGroups).flatMap(([level, queries]) => {
+      // Map relevance level to corresponding relevance label
+      const relevanceLabel = 
+        level === 'very specific' ? 'very high' :
+        level === 'specific' ? 'high' :
+        level === 'moderate' ? 'medium' : 'broad';
+      
+      // Create a MarketDataResult for each query in this group
+      return queries.map(query => {
+        // Find auction results for this query
+        const count = keywordCounts.get(query) || 0;
+        // Get the data items for this query - we have to approximate them
+        // by filtering the gathered data for items with matching titles
+        const data = count > 0 ? 
+          gatheredAuctionData.filter(item => 
+            item.title.toLowerCase().includes(query.toLowerCase())
+          ) : [];
+        
+        return {
+          query,
+          data,
+          relevance: relevanceLabel
+        };
+      });
+    });
+
     // NEW STEP: Assess quality of auction results using AI
     const auctionDataWithQuality = await assessAuctionResultsQuality(
       this.openai,
       text,
       value,
-      gatheredAuctionData
+      gatheredAuctionData,
+      queryGroupsAsResults.filter(r => r.data.length > 0) // Only pass results with data
     );
 
     // --- Data Consistency: Use the quality-assessed data for all subsequent steps --- 

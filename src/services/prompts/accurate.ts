@@ -88,25 +88,28 @@ Item description: "${text}"
 Extract the most valuable search keywords from this description to find comparable auction results.
 
 Your task:
-1. Identify key descriptive terms that would appear in auction catalogs
-2. Include manufacturer/artist/maker names, materials, period/era terms, and distinctive features
+1. Identify key descriptive terms that would appear in real auction catalogs
+2. Include simple standard terms for manufacturer/artist names, materials, periods
 3. Exclude generic terms that would return too many irrelevant results
-4. Organize keywords from most specific to more general
+4. Include single words that would be effective search terms
 
 Format your response as:
 {
-  "primaryKeywords": [array of 3-5 most specific and important search terms],
-  "secondaryKeywords": [array of 5-8 additional relevant terms],
-  "categoryTerms": [array of 2-3 general category terms],
-  "exclusionTerms": [array of terms that should be excluded to avoid irrelevant results]
+  "primaryKeywords": [array of 3-5 most specific and important single terms or simple phrases],
+  "secondaryKeywords": [array of 5-8 additional relevant individual terms],
+  "categoryTerms": [array of 2-3 general category single terms]
 }
 
-IMPORTANT:
-- Focus on terms that auctioneers and appraisers would use in formal catalog descriptions
-- Include variations of key terms where relevant (e.g., "Art Deco" and "Art-Deco")
-- For artworks, always include artist name and medium
-- For furniture, include style, wood type, and period
-- For decorative arts, include maker, material, and period
+CRITICALLY IMPORTANT:
+- Only use terms that actually appear in auction databases
+- Prefer single words and simple 2-3 word phrases
+- DO NOT create artificial combinations of terms
+- DO NOT fabricate creative descriptions
+- Avoid specific artistic interpretations unless explicitly mentioned
+- For artworks, include artist name and medium as separate terms
+- For furniture, include style, wood type, and period as separate terms
+- Include logical standalone words that would work as search terms
+- Include common descriptors found in auction catalogs
 - Return only the JSON object with no additional text`;
 }
 

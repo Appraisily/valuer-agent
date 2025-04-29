@@ -12,7 +12,7 @@ export class KeywordExtractionService {
   async extractKeywords(text: string): Promise<string[]> {
     console.log('Extracting optimized keywords for statistics:', text.substring(0, 100) + '...');
 
-    // Enhanced prompt with structured distribution requirements
+    // Enhanced prompt with structured distribution requirements and emphasis on real auction terms
     const prompt = `
 Generate multiple levels of search queries for finding comparable auction items for:
 "${text}"
@@ -27,48 +27,56 @@ Create a JSON object with the following structure:
   ]
 }
 
-IMPORTANT: 
-- Each keyword or phrase should be an actual auction search term
-- Avoid hyphenated terms like "Impressionist-Style" - use separate words instead (e.g., "Impressionist Style")
-- When referencing art styles, artists, materials, etc., use common terminology found in auction catalogs
-- Return ONLY a valid JSON object with the exact structure shown above - no explanation or additional text
+CRITICALLY IMPORTANT: 
+- Use ONLY standard auction catalog terminology
+- Each term MUST be found in actual auction databases
+- Prefer single words and simple phrases (e.g., "Dali", "Salvador Dali", "oil painting")
+- DO NOT create artificial combinations of terms or hyphenated phrases
+- DO NOT fabricate creative descriptions - stick to basic descriptive terms
+- Avoid complex phrases like "Mid-Century Plein-Air Village Landscape" 
+- Include artist/maker names as standalone terms
+- Include medium/materials as standalone terms
+- Include simple descriptive terms individually (e.g., "landscape", "portrait", "antique")
+- For artist works, use format: "[Artist Name]", "[Artist Name] [Medium]", "[Medium]"
+- Return ONLY a valid JSON object with the exact structure shown above
 
-Example response format for "Salvador Dali Impressionist Rural Landscape":
+Example response format for a Salvador Dali artwork:
 {
   "result": [
-    "Salvador Dali Impressionist Rural Landscape Painting",
-    "Dali Impressionist Style Landscape Art Piece",
-    "Salvador Dali Impressionist Landscape Drawing",
-    "Dali Rural Landscape Impressionist Painting",
-    "Salvador Dali Impressionist Style Rural Artwork",
-    "Salvador Dali Impressionist",
-    "Dali Rural Landscape",
-    "Impressionist Rural Art",
-    "Dali Impressionist Art",
-    "Rural Landscape Art",
-    "Impressionist Salvador Dali",
-    "Impressionist Style Painting",
-    "Dali Landscape Painting",
-    "Rural Landscape Painting",
-    "Dali Impressionist Drawing",
-    "Dali Impressionist",
-    "Rural Landscape",
-    "Impressionist Art",
-    "Landscape Painting",
-    "Dali Art",
-    "Impressionist",
-    "Landscape",
-    "Salvador",
+    "Salvador Dali signed",
+    "Dali oil painting",
+    "Salvador Dali lithograph",
+    "Dali authentic",
+    "Salvador Dali original",
+    "Salvador Dali",
+    "Dali painting",
+    "Dali artwork",
+    "Spanish artist painting",
+    "Surrealist painting",
+    "Original painting",
+    "Signed artwork",
+    "Limited edition",
     "Dali",
-    "Art"
+    "Salvador",
+    "Surrealist",
+    "Oil painting",
+    "Painting",
+    "Artwork",
+    "Fine art",
+    "Artist",
+    "Spanish",
+    "Art",
+    "Oil",
+    "Canvas"
   ]
-}`;
+}
+`;
 
     try {
         // Use a more capable model for better query generation
         const response = await callOpenAIAndParseJson<{result: string[]}>(this.openai, {
             model: "gpt-4o", 
-            systemMessage: "You are an expert in auction terminology, art, antiques, and collectibles categorization. Generate optimal search queries for finding comparable auction items, returning ONLY a valid JSON object with the exact structure requested.",
+            systemMessage: "You are an expert in auction terminology, art, antiques, and collectibles categorization. Generate ONLY realistic search terms that actually exist in auction databases. Never invent creative descriptions or fabricated terminology. Use factual, standard terminology used by major auction houses.",
             userPrompt: prompt,
             expectJsonResponse: true
         });

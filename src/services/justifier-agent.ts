@@ -56,7 +56,7 @@ export class JustifierAgent {
     try {
       const response = await callOpenAIAndParseJson<string[]>(this.openai, {
         model: "o3-mini",
-        systemMessage: "You are an expert in antiques and auctions. Your task is to create effective search queries as a JSON array of strings that will find relevant comparable items in auction databases.",
+        systemMessage: "You are an expert in antiques and auctions. Generate ONLY standard auction search terms that would work in real auction databases. Prefer single words and simple phrases over complex combinations. Avoid creative descriptions and include common individual terms used by auction houses.",
         userPrompt: prompt,
         expectJsonResponse: true
       });
@@ -77,7 +77,7 @@ export class JustifierAgent {
     try {
       const keywordData = await callOpenAIAndParseJson<KeywordExtractionResponse>(this.openai, {
         model: "o3-mini", // Keep o3-mini for keyword extraction speed?
-        systemMessage: "You are an expert in auction terminology and search optimization. Extract precise keywords that would appear in auction catalogs. Return a JSON object with keys 'primaryKeywords', 'secondaryKeywords', 'categoryTerms', each containing an array of strings.",
+        systemMessage: "You are an expert in auction terminology and search optimization. Extract ONLY standard terms from real auction catalogs. Prefer single words and simple phrases that would work as search terms in auction databases. Avoid combining multiple concepts into artificial phrases.",
         userPrompt: prompt,
         expectJsonResponse: true
       });

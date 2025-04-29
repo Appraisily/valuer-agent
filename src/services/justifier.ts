@@ -58,25 +58,31 @@ export class JustifierAgent {
 
   private async getSearchStrategy(text: string, value: number): Promise<string[]> {
     const prompt = `
-As an antiques expert, analyze this item and suggest search queries in order of specificity, from most specific to most general.
-Start with the most precise description that would match this exact item, then progressively broaden the terms.
-The goal is to find the most relevant matches first, then fall back to broader categories if needed.
+As an antiques expert, analyze this item and suggest realistic search queries that would match actual auction database metadata. 
+DO NOT fabricate creative descriptions or invent terms that wouldn't appear in auction database records.
+
+Important guidelines:
+- Focus on factual, standard terminology used in auction catalogs
+- Use established art historical terms and standard categorizations
+- Avoid speculative phrases or fabricated artistic descriptions
+- Each query should use terminology found in actual auction listings
+- Start with the most specific real-world search terms, then broaden to more general categories
 
 Item: "${text}" (Estimated value: $${value})
 
-Format your response as a JSON array of strings, from most specific to most general. Example:
-["Victorian mahogany balloon back dining chair circa 1860",
- "Victorian mahogany dining chair",
- "antique mahogany chair",
- "antique dining chair",
- "antique furniture"]`;
+Format your response as a JSON array of strings, from most specific to most general. Example for a painting:
+["Salvador Dali signed oil", 
+ "Salvador Dali oil painting",
+ "Salvador Dali painting",
+ "Salvador Dali artwork",
+ "Salvador Dali"]`;
 
     const completion = await this.openai.chat.completions.create({
       model: "o3-mini",
       messages: [
         {
           role: "assistant",
-          content: "You are an expert in antiques and auctions. Your task is to create effective search queries that will find relevant comparable items in auction databases."
+          content: "You are an expert in antiques and auctions. Your task is to create effective, realistic search queries using terminology that actually appears in auction database records. Never invent creative descriptions that wouldn't be found in real auction metadata."
         },
         {
           role: "user",

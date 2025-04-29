@@ -21,11 +21,22 @@ export function createSearchStrategyPrompt(text: string, value?: number): string
 Generate search queries to find comparable items for:
 "${text}"${value ? ` (estimated value: ${value})` : ''}
 
+CRITICALLY IMPORTANT:
+- Use ONLY standard auction catalog terminology
+- Each term MUST be found in actual auction databases
+- Prefer single words and simple phrases
+- DO NOT create artificial combinations of terms 
+- DO NOT fabricate creative descriptions
+- Include artist/maker names as standalone terms
+- Include medium/materials as standalone terms
+- Include simple descriptive terms individually
+- Focus on standard descriptive terms used by major auction houses
+
 Return an array of search terms, ordered from most specific to most general.
 Include variations in terminology and key features.
 
-Example response format:
-["exact match query", "variation 1", "broader query", "general category"]
+Example response format for an artwork:
+["Salvador Dali signed", "Dali oil painting", "Salvador Dali", "Dali", "Oil painting", "Painting", "Canvas"]
 `;
 }
 
