@@ -228,10 +228,10 @@ export class StatisticsService {
         data_quality: dataQuality,
         // Include search keywords information
         search_keywords: {
-          very_specific: very_specific.map(keyword => ({keyword, count: keywordCounts.get(keyword) || 0})),
-          specific: specific.map(keyword => ({keyword, count: keywordCounts.get(keyword) || 0})),
-          moderate: moderate.map(keyword => ({keyword, count: keywordCounts.get(keyword) || 0})),
-          broad: broad.map(keyword => ({keyword, count: keywordCounts.get(keyword) || 0})),
+          very_specific: very_specific.map(k => ({keyword: k.replace(/["]+/g, ''), count: keywordCounts.get(k) || 0})),
+          specific: specific.map(k => ({keyword: k.replace(/["]+/g, ''), count: keywordCounts.get(k) || 0})),
+          moderate: moderate.map(k => ({keyword: k.replace(/["]+/g, ''), count: keywordCounts.get(k) || 0})),
+          broad: broad.map(k => ({keyword: k.replace(/["]+/g, ''), count: keywordCounts.get(k) || 0})),
           total_count: keywords.length
         }
         // total_count is removed - added by server.ts if it limits comparable_sales
@@ -313,5 +313,13 @@ export class StatisticsService {
       }
       
       return result;
+  }
+
+  // Helper to strip problematic double-quotes so WordPress' unslashing cannot break the JSON we return.
+  private sanitizeKeyword = (k: string) => k.replace(/[""" ]/g, '');
+
+  // Better helper that strips standard and curly quotes – will be used in mappings below
+  private sanitizeKeywordStr(k: string): string {
+    return k.replace(/["""]/g, '');
   }
 }
