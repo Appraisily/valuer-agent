@@ -12,17 +12,21 @@ async function getOpenAIKey() {
     console.log('Using OPENAI_API_KEY from environment variables');
     return process.env.OPENAI_API_KEY;
   }
-  
-  // For Cloud Run, use Secret Manager
+
+  // For Cloud Run, use Secret Manager. Auto-detect project ID when not provided.
   try {
     const client = new SecretManagerServiceClient();
-    const projectId = process.env.GOOGLE_CLOUD_PROJECT_ID;
-    if (!projectId) {
-      throw new Error('GOOGLE_CLOUD_PROJECT_ID environment variable is not set');
-    }
-    
+    const detectedProjectId = await client.getProjectId();
+    const projectId = (
+      process.env.GOOGLE_CLOUD_PROJECT ||
+      process.env.GCP_PROJECT ||
+      process.env.PROJECT_ID ||
+      process.env.GOOGLE_CLOUD_PROJECT_ID ||
+      detectedProjectId
+    );
+
     const name = `projects/${projectId}/secrets/OPENAI_API_KEY/versions/latest`;
-    
+
     const [version] = await client.accessSecretVersion({ name });
     return version.payload?.data?.toString() || '';
   } catch (error) {
