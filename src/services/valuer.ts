@@ -112,6 +112,62 @@ export class ValuerService {
     this.audienceOrigin = `${parsed.protocol}//${parsed.host}`;
   }
 
+  /**
+   * Executes multiple searches in a single request via Valuer batch endpoint.
+   * Returns hits per query in the same ValuerHit shape used by single search.
+   */
+  async multiSearch(
+    inputs: Array<{ query: string; minPrice?: number; maxPrice?: number; limit?: number }>
+  ): Promise<Array<{ query: string; hits: ValuerHit[] }>> {
+    const body: any = {
+      searches: inputs.map((q) => {
+        const params: any = { query: q.query, sort: 'relevance' };
+        if (q.limit !== undefined) params.limit = q.limit;
+        if (q.minPrice !== undefined || q.maxPrice !== undefined) {
+          params.priceResult = {} as any;
+          if (q.minPrice !== undefined) params.priceResult.min = String(q.minPrice);
+          if (q.maxPrice !== undefined) params.priceResult.max = String(q.maxPrice);
+        }
+        return params;
+      }),
+      fetchAllPages: false,
+      saveToGcs: false,
+      concurrency: Math.max(1, Number(process.env.VALUER_BATCH_CONCURRENCY || 3)),
+    };
+
+    const res = await this.batchSearch(body);
+    const results: Array<{ query: string; hits: ValuerHit[] }> = [];
+    const arr = Array.isArray(res?.searches) ? res.searches : [];
+
+    for (const item of arr) {
+      try {
+        if (item && !item.error && item.result?.data?.lots) {
+          const lots = Array.isArray(item.result.data.lots) ? item.result.data.lots : [];
+          const hits: ValuerHit[] = lots
+            .map((lot: any) => ({
+              lotTitle: lot.title,
+              priceResult: lot?.price?.amount,
+              currencyCode: lot?.price?.currency,
+              currencySymbol: lot?.price?.symbol,
+              houseName: lot.auctionHouse,
+              dateTimeLocal: lot.date,
+              lotNumber: lot.lotNumber,
+              saleType: lot.saleType,
+              lotDescription: lot.description || ''
+            }))
+            .filter((h: ValuerHit) => Boolean(h.lotTitle && h.priceResult));
+          results.push({ query: item.query || '', hits });
+        } else {
+          results.push({ query: item?.query || '', hits: [] });
+        }
+      } catch (_err) {
+        results.push({ query: item?.query || '', hits: [] });
+      }
+    }
+
+    return results;
+  }
+
   private async getAuthHeader(): Promise<Record<string, string>> {
     // If explicitly disabled, skip auth header
     if (process.env.VALUER_AUTH_DISABLED === 'true') {

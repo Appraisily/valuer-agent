@@ -121,14 +121,21 @@ export class MarketDataService {
           console.log(`Using lower min price (${queryMinPrice}) for broad query to find more results`);
         }
         
-        // Send a more focused search for higher relevance scores
-        const result = await this.valuer.search(
-          query, 
-          queryMinPrice, 
-          maxPrice, 
-          searchLimit  // Set appropriate limit based on how many more results we need
-        );
-        const simplifiedData = this.simplifyAuctionData(result);
+        // Prefer batch when we have multiple remaining queries.
+        // Build a small batch: current query + up to 2 next ones to reduce round trips.
+        const currentIdx = sortedSearchTerms.indexOf(query);
+        const batchSlice = [query, ...sortedSearchTerms.slice(currentIdx + 1, currentIdx + 3)];
+        const batchInputs = batchSlice.map(q => ({
+          query: q,
+          minPrice: queryMinPrice,
+          maxPrice,
+          limit: searchLimit
+        }));
+
+        const batch = await this.valuer.multiSearch(batchInputs);
+        // Take the first result as the primary; enqueue the others into allResults opportunistically
+        const primary = batch.find(b => b.query === query) || batch[0];
+        const simplifiedData = this.simplifyAuctionData({ hits: primary?.hits || [] });
         
         console.log('\nRaw data structure:', {
           hasHits: Array.isArray(result?.hits),
@@ -187,6 +194,17 @@ export class MarketDataService {
             console.log('\n=== Search Complete (Basic Threshold) ===');
             console.log(`Found sufficient items (${totalItemsFound} total items)`);
             break;
+          }
+        }
+
+        // Opportunistically store results from the extra batched queries
+        for (const extra of batch) {
+          if (!extra || extra.query === query) continue;
+          const extraData = this.simplifyAuctionData({ hits: extra.hits || [] });
+          if (extraData.length > 0) {
+            const wc = extra.query.split(' ').length;
+            const rel = wc >= 4 ? 'very high' : wc >= 3 ? 'high' : wc >= 2 ? 'medium' : 'broad';
+            allResults.push({ query: extra.query, data: extraData, relevance: rel });
           }
         }
 

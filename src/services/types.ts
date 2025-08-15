@@ -80,6 +80,8 @@ export interface ValueRangeResponse {
   marketTrend: 'rising' | 'stable' | 'declining';
   keyFactors?: string[];
   dataQuality?: 'high' | 'medium' | 'low';
+  // Optional: terms used to query the auction data sources
+  searchTerms?: string[];
 }
 
 // Interface for histogram bucket data in enhanced statistics

@@ -135,7 +135,10 @@ export class JustifierAgent {
     }
 
     // 4. Process and adjust the response
-    return this.processValueRangeResponse(aiResponse, useAccurateModel);
+    const processed = this.processValueRangeResponse(aiResponse, useAccurateModel);
+    // Attach the actual terms used for transparency downstream
+    (processed as any).searchTerms = allSearchTerms;
+    return processed;
   }
 
   private logMarketDataSummary(allResults: MarketDataResult[]): void {
