@@ -3,6 +3,7 @@ import { z, ZodError } from 'zod';
 import OpenAI from 'openai';
 import { SecretManagerServiceClient } from '@google-cloud/secret-manager';
 import { ValuerService } from './services/valuer.js';
+import { KeywordExtractionService } from './services/keyword-extraction.service.js';
 import { JustifierAgent } from './services/justifier-agent.js';
 import { StatisticsService } from './services/statistics-service.js';
 
@@ -38,6 +39,7 @@ let openai: OpenAI;
 let justifier: JustifierAgent;
 let statistics: StatisticsService;
 const valuer = new ValuerService();
+let keyworder: KeywordExtractionService;
 
 // Initialize OpenAI client with secret
 async function initializeOpenAI() {
@@ -45,6 +47,7 @@ async function initializeOpenAI() {
   openai = new OpenAI({ apiKey });
   justifier = new JustifierAgent(openai, valuer);
   statistics = new StatisticsService(openai, valuer);
+  keyworder = new KeywordExtractionService(openai);
 }
 
 const RequestSchema = z.object({
@@ -74,7 +77,7 @@ const EnhancedStatisticsRequestSchema = z.object({
 
 // Middleware to check if essential services are initialized
 const checkServicesInitialized = (_req: Request, _res: Response, next: NextFunction) => {
-  if (!openai || !justifier || !statistics) {
+  if (!openai || !justifier || !statistics || !keyworder) {
     // Use next(error) to pass control to the error handling middleware
     return next(new Error('Core services not initialized'));
   }
@@ -161,6 +164,7 @@ const asyncHandler = (fn: (req: Request, res: Response, next: NextFunction) => P
 app.use('/api/justify', checkServicesInitialized);
 app.use('/api/find-value', checkServicesInitialized);
 app.use('/api/find-value-range', checkServicesInitialized);
+app.use('/api/multi-search', checkServicesInitialized);
 // Note: /api/auction-results and /api/wp2hugo-auction-results only need 'valuer', which is initialized synchronously.
 // Note: /api/enhanced-statistics needs 'statistics' service.
 app.use('/api/enhanced-statistics', checkServicesInitialized);
@@ -238,6 +242,52 @@ app.post('/api/wp2hugo-auction-results', asyncHandler(async (req, res) => {
   res.json(results);
 }));
 
+// New endpoint: multi-search orchestrated via Valuer batch
+const MultiSearchSchema = z.object({
+  description: z.string(),
+  minPrice: z.number().optional(),
+  maxQueries: z.number().optional(),
+  concurrency: z.number().optional(),
+  limitPerQuery: z.number().optional(),
+  sort: z.string().optional()
+});
+
+app.post('/api/multi-search', asyncHandler(async (req, res) => {
+  const { description, minPrice = Number(process.env.VALUER_MIN_PRICE_DEFAULT || 1000), maxQueries = 5, concurrency = Number(process.env.VALUER_BATCH_CONCURRENCY || 3), limitPerQuery = 100, sort = 'relevance' } = MultiSearchSchema.parse(req.body);
+
+  console.log(`Multi-search request: desc len=${description.length}, maxQueries=${maxQueries}, minPrice=${minPrice}, concurrency=${concurrency}`);
+
+  const terms = await keyworder.extractKeywords(description);
+  const selected = terms.slice(0, Math.max(1, maxQueries));
+
+  const searches = selected.map(q => ({ query: q, 'priceResult[min]': minPrice, limit: limitPerQuery, sort }));
+
+  const batch = await valuer.batchSearch({ searches, concurrency });
+
+  // Prepare aggregated unique titles list for quick UI use (optional)
+  const uniqueTitles = new Set<string>();
+  const aggregated: Array<{ title: string, auctionHouse?: string, date?: string } > = [];
+  for (const s of batch.searches || []) {
+    const lots = s?.result?.data?.lots || [];
+    for (const lot of lots) {
+      if (lot?.title && !uniqueTitles.has(lot.title)) {
+        uniqueTitles.add(lot.title);
+        aggregated.push({ title: lot.title, auctionHouse: lot.auctionHouse, date: lot.date });
+      }
+    }
+  }
+
+  res.json({
+    success: true,
+    generatedQueries: selected,
+    sources: { valuerBatch: true },
+    data: {
+      lots: aggregated,
+      byQuery: batch.searches
+    },
+    stats: batch.batch || { total: searches.length, completed: (batch.searches || []).length }
+  });
+}));
 
 app.post('/api/enhanced-statistics', asyncHandler(async (req, res) => {
   // Initialization check is done by middleware

@@ -160,4 +160,30 @@ export class ValuerService {
     // Search within the calculated price range, limit results
     return this.search(description, minPrice, maxPrice, 20); // Limit results for similarity search
   }
+
+  /**
+   * Calls the Valuer batch endpoint to run multiple searches in one request.
+   */
+  async batchSearch(body: {
+    searches: Array<Record<string, any>>,
+    cookies?: Array<Record<string, any>>,
+    fetchAllPages?: boolean,
+    maxPages?: number,
+    concurrency?: number,
+    saveToGcs?: boolean
+  }): Promise<any> {
+    const url = `${this.baseUrl}/batch`;
+    console.log(`Executing valuer batch: ${url}`);
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      console.error('Valuer batch error:', text);
+      throw new Error(`Failed to fetch from Valuer service: ${response.statusText}`);
+    }
+    return response.json();
+  }
 }
