@@ -136,13 +136,14 @@ export class MarketDataService {
         // Take the first result as the primary; enqueue the others into allResults opportunistically
         const primary = batch.find(b => b.query === query) || batch[0];
         const simplifiedData = this.simplifyAuctionData({ hits: primary?.hits || [] });
-        
+
+        const primaryHits = Array.isArray(primary?.hits) ? primary.hits : [];
         console.log('\nRaw data structure:', {
-          hasHits: Array.isArray(result?.hits),
-          totalHits: result?.hits?.length || 0,
-          sampleHit: result?.hits?.[0] ? {
-            lotTitle: result.hits[0].lotTitle,
-            priceResult: result.hits[0].priceResult
+          hasHits: primaryHits.length > 0,
+          totalHits: primaryHits.length,
+          sampleHit: primaryHits[0] ? {
+            lotTitle: primaryHits[0].lotTitle,
+            priceResult: primaryHits[0].priceResult
           } : 'No hits'
         });
         
