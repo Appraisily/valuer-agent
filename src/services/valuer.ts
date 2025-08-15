@@ -34,7 +34,7 @@ function transformValuerLotToHit(lot: ValuerLot): ValuerHit {
 }
 
 export class ValuerService {
-  private baseUrl = 'https://valuer-856401495068.us-central1.run.app/api/search';
+  private baseUrl = 'https://valuer-dev-856401495068.us-central1.run.app/api/search';
 
   /**
    * Core search function to fetch results from the Valuer API.
