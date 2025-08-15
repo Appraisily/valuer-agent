@@ -21,6 +21,51 @@ async function fetchIdentityToken(audienceUrl: string): Promise<string | null> {
   return null;
 }
 
+type RetryableStatus = 429 | 502 | 503 | 504;
+
+interface RetryConfig {
+  attempts: number;
+  baseDelayMs: number;
+  maxDelayMs: number;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function fetchWithRetry(input: string, init: RequestInit, retry?: Partial<RetryConfig>): Promise<Response> {
+  const cfg: RetryConfig = {
+    attempts: Math.max(1, Number(process.env.VALUER_RETRY_ATTEMPTS || retry?.attempts || 4)),
+    baseDelayMs: Math.max(100, Number(process.env.VALUER_RETRY_BASE_MS || retry?.baseDelayMs || 500)),
+    maxDelayMs: Math.max(500, Number(process.env.VALUER_RETRY_MAX_MS || retry?.maxDelayMs || 4000)),
+  };
+
+  let lastError: any;
+  for (let attempt = 1; attempt <= cfg.attempts; attempt++) {
+    try {
+      const res = await fetch(input, init);
+      if (res.ok) return res;
+      const status = res.status as RetryableStatus | number;
+      // Retry only on transient statuses
+      if (status === 429 || status === 502 || status === 503 || status === 504) {
+        lastError = new Error(`HTTP ${status}`);
+      } else {
+        return res; // non-retryable
+      }
+    } catch (err: any) {
+      // Network-level errors: retry
+      lastError = err;
+    }
+
+    if (attempt < cfg.attempts) {
+      const jitter = Math.random() * 0.25 + 0.75; // 0.75x - 1x
+      const delay = Math.min(cfg.maxDelayMs, Math.floor(cfg.baseDelayMs * Math.pow(2, attempt - 1) * jitter));
+      await sleep(delay);
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
 // Define the structure for a transformed hit
 interface ValuerHit {
   lotTitle: string;
@@ -110,7 +155,7 @@ export class ValuerService {
     const url = `${this.baseUrl}?${params}`;
     console.log(`Executing valuer search: ${url}`);
     const authHeader = await this.getAuthHeader();
-    const response = await fetch(url, { headers: { ...authHeader } as any });
+    const response = await fetchWithRetry(url, { headers: { ...authHeader } as any });
 
     if (!response.ok) {
       const errorBody = await response.text();
@@ -228,7 +273,7 @@ export class ValuerService {
     const url = `${this.baseUrl}/batch`;
     console.log(`Executing valuer batch: ${url}`);
     const authHeader = await this.getAuthHeader();
-    const response = await fetch(url, {
+    const response = await fetchWithRetry(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeader } as any,
       body: JSON.stringify(body)
