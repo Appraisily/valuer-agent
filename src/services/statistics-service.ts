@@ -316,10 +316,5 @@ export class StatisticsService {
   }
 
   // Helper to strip problematic double-quotes so WordPress' unslashing cannot break the JSON we return.
-  private sanitizeKeyword = (k: string) => k.replace(/[""" ]/g, '');
-
-  // Better helper that strips standard and curly quotes – will be used in mappings below
-  private sanitizeKeywordStr(k: string): string {
-    return k.replace(/["""]/g, '');
-  }
+  // Removed unused helpers sanitizeKeyword and sanitizeKeywordStr to satisfy TS strict checks
 }
