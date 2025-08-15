@@ -1,5 +1,26 @@
 import { ValuerResponse, ValuerLot } from './types.js';
 
+// Helper to detect Cloud Run/metadata server availability for ID token fetching
+async function fetchIdentityToken(audienceUrl: string): Promise<string | null> {
+  // Prefer explicitly provided token (useful for local dev or CI)
+  if (process.env.VALUER_ID_TOKEN && process.env.VALUER_ID_TOKEN.trim().length > 0) {
+    return process.env.VALUER_ID_TOKEN.trim();
+  }
+
+  // Attempt to fetch from GCP metadata server when running on Cloud Run/GCE/GKE
+  try {
+    const metadataUrl = `http://metadata/computeMetadata/v1/instance/service-accounts/default/identity?audience=${encodeURIComponent(audienceUrl)}&format=full`;
+    const res = await fetch(metadataUrl, { headers: { 'Metadata-Flavor': 'Google' } as any });
+    if (res.ok) {
+      const token = await res.text();
+      return token || null;
+    }
+  } catch (_err) {
+    // Ignore – not in GCP environment or metadata server not reachable
+  }
+  return null;
+}
+
 // Define the structure for a transformed hit
 interface ValuerHit {
   lotTitle: string;
@@ -34,7 +55,37 @@ function transformValuerLotToHit(lot: ValuerLot): ValuerHit {
 }
 
 export class ValuerService {
-  private baseUrl = 'https://valuer-dev-856401495068.us-central1.run.app/api/search';
+  private baseUrl = (process.env.VALUER_BASE_URL || 'https://valuer-dev-856401495068.us-central1.run.app/api/search').replace(/\/?$/, '');
+
+  private audienceOrigin: string;
+  private cachedAuthHeader: { Authorization: string } | null = null;
+
+  constructor() {
+    // Audience must be the service origin (no path) for Cloud Run ID tokens
+    const parsed = new URL(this.baseUrl);
+    // If baseUrl already includes a path like /api/search, only use the origin for audience
+    this.audienceOrigin = `${parsed.protocol}//${parsed.host}`;
+  }
+
+  private async getAuthHeader(): Promise<Record<string, string>> {
+    // If explicitly disabled, skip auth header
+    if (process.env.VALUER_AUTH_DISABLED === 'true') {
+      return {};
+    }
+
+    // Cache token for the process lifetime to avoid repeated metadata calls
+    if (this.cachedAuthHeader) {
+      return this.cachedAuthHeader;
+    }
+
+    const token = await fetchIdentityToken(this.audienceOrigin);
+    if (token) {
+      this.cachedAuthHeader = { Authorization: `Bearer ${token}` };
+      return this.cachedAuthHeader;
+    }
+    // No token available; return empty headers (works if the service allows unauthenticated)
+    return {};
+  }
 
   /**
    * Core search function to fetch results from the Valuer API.
@@ -56,8 +107,10 @@ export class ValuerService {
     // Add sorting by relevance
     params.append('sort', 'relevance');
 
-    console.log(`Executing valuer search: ${this.baseUrl}?${params}`);
-    const response = await fetch(`${this.baseUrl}?${params}`);
+    const url = `${this.baseUrl}?${params}`;
+    console.log(`Executing valuer search: ${url}`);
+    const authHeader = await this.getAuthHeader();
+    const response = await fetch(url, { headers: { ...authHeader } as any });
 
     if (!response.ok) {
       const errorBody = await response.text();
@@ -174,9 +227,10 @@ export class ValuerService {
   }): Promise<any> {
     const url = `${this.baseUrl}/batch`;
     console.log(`Executing valuer batch: ${url}`);
+    const authHeader = await this.getAuthHeader();
     const response = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeader } as any,
       body: JSON.stringify(body)
     });
     if (!response.ok) {
