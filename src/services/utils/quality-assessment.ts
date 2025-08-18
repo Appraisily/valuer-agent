@@ -94,7 +94,7 @@ export async function assessAuctionResultsQuality(
     console.log(`Selected 20 most price-relevant results for quality assessment (from ${auctionResults.length} total)`);
   }
   
-  console.log(`Assessing quality of ${resultsToAssess.length} auction results using OpenAI o3-mini`);
+  console.log(`Assessing quality of ${resultsToAssess.length} auction results using OpenAI gpt-5`);
   
   // Create a map to efficiently look up assessed items by a unique key
   const itemKeyMap = new Map<string, number>();
@@ -161,7 +161,7 @@ Example format:
 
   try {
     const completion = await openai.chat.completions.create({
-      model: "o3-mini",
+      model: "gpt-5",
       messages: [
         { 
           role: "assistant",

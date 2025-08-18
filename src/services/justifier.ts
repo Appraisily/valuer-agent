@@ -78,7 +78,7 @@ Format your response as a JSON array of strings, from most specific to most gene
  "Salvador Dali"]`;
 
     const completion = await this.openai.chat.completions.create({
-      model: "o3-mini",
+      model: "gpt-5",
       messages: [
         {
           role: "assistant",

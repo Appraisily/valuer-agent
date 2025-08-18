@@ -55,7 +55,7 @@ export class JustifierAgent {
     const prompt = createSearchStrategyPrompt(text, value || 250);
     try {
       const response = await callOpenAIAndParseJson<string[]>(this.openai, {
-        model: "o3-mini",
+        model: "gpt-5",
         systemMessage: "You are an expert in antiques and auctions. Generate ONLY standard auction search terms that would work in real auction databases. Prefer single words and simple phrases over complex combinations. Avoid creative descriptions and include common individual terms used by auction houses.",
         userPrompt: prompt,
         expectJsonResponse: true
@@ -76,7 +76,7 @@ export class JustifierAgent {
     const prompt = createKeywordExtractionPrompt(text);
     try {
       const keywordData = await callOpenAIAndParseJson<KeywordExtractionResponse>(this.openai, {
-        model: "o3-mini", // Keep o3-mini for keyword extraction speed?
+        model: "gpt-5",
         systemMessage: "You are an expert in auction terminology and search optimization. Extract ONLY standard terms from real auction catalogs. Prefer single words and simple phrases that would work as search terms in auction databases. Avoid combining multiple concepts into artificial phrases.",
         userPrompt: prompt,
         expectJsonResponse: true
@@ -158,7 +158,7 @@ export class JustifierAgent {
     const systemMessage = "You are an expert antiques and collectibles appraiser. Calculate broad value ranges based on auction data, accounting for all possible variations and market conditions. Respond with a JSON object including keys: 'minValue', 'maxValue', 'mostLikelyValue', 'explanation', 'auctionResults', 'confidenceLevel', 'marketTrend', 'keyFactors', 'dataQuality'.";
     
     return await callOpenAIAndParseJson<ValueRangeAIResponse>(this.openai, {
-      model: "o3-mini",
+      model: "gpt-5",
       systemMessage: systemMessage,
       userPrompt: prompt,
       expectJsonResponse: true
@@ -170,7 +170,7 @@ export class JustifierAgent {
     const systemMessage = "You are an expert art and antiques appraiser specializing in precise market valuations. Provide accurate value ranges based on verified auction data, focusing on current market reality. Respond with a JSON object including keys: 'minValue', 'maxValue', 'mostLikelyValue', 'explanation', 'auctionResults', 'confidenceLevel', 'marketTrend', 'keyFactors', 'dataQuality'.";
 
     return await callOpenAIAndParseJson<ValueRangeAIResponse>(this.openai, {
-      model: "gpt-4o", // Use more capable model for accuracy
+      model: "gpt-5",
       systemMessage: systemMessage,
       userPrompt: prompt,
       expectJsonResponse: true
@@ -277,7 +277,7 @@ export class JustifierAgent {
 
     try {
         const response = await callOpenAIAndParseJson<ValueFinderAIResponse>(this.openai, {
-            model: "o3-mini",
+            model: "gpt-5",
             systemMessage: systemMessage,
             userPrompt: prompt,
             expectJsonResponse: true
