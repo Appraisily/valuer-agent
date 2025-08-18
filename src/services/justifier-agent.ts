@@ -248,7 +248,7 @@ export class JustifierAgent {
 
     try {
         const response = await callOpenAIAndParseJson<JustificationAIResponse>(this.openai, {
-            model: "o3-mini",
+            model: "gpt-5",
             systemMessage: systemMessage,
             userPrompt: prompt,
             expectJsonResponse: true
