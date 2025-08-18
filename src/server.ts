@@ -253,16 +253,15 @@ const MultiSearchSchema = z.object({
   primaryImageUrl: z.string().url().optional(),
   additionalImageUrls: z.array(z.string().url()).optional(),
   minPrice: z.number().optional(),
-  maxQueries: z.number().optional(),
   concurrency: z.number().optional(),
   limitPerQuery: z.number().optional(),
   sort: z.string().optional()
 });
 
 app.post('/api/multi-search', asyncHandler(async (req, res) => {
-  const { description, primaryImageUrl, additionalImageUrls = [], minPrice = Number(process.env.VALUER_MIN_PRICE_DEFAULT || 1000), maxQueries = 5, concurrency = Number(process.env.VALUER_BATCH_CONCURRENCY || 3), limitPerQuery = 100, sort = 'relevance' } = MultiSearchSchema.parse(req.body);
+  const { description, primaryImageUrl, additionalImageUrls = [], minPrice = Number(process.env.VALUER_MIN_PRICE_DEFAULT || 250), concurrency = Number(process.env.VALUER_BATCH_CONCURRENCY || 5), limitPerQuery = 100, sort = 'relevance' } = MultiSearchSchema.parse(req.body);
 
-  console.log(`Multi-search request: desc len=${description.length}, maxQueries=${maxQueries}, minPrice=${minPrice}, concurrency=${concurrency}`);
+  console.log(`Multi-search request: desc len=${description.length}, minPrice=${minPrice}, concurrency=${concurrency}`);
 
   // Generate exactly 5 search terms using GPT-5, incorporating image URLs contextually for speed-focused screener
   const imagesList = [primaryImageUrl, ...additionalImageUrls.filter(Boolean)].filter(Boolean).slice(0, 3);
@@ -295,7 +294,7 @@ app.post('/api/multi-search', asyncHandler(async (req, res) => {
     return res.status(503).json({ success: false, error: 'Failed to generate search terms' });
   }
 
-  const searches = selected.map(q => ({ query: q, 'priceResult[min]': minPrice, limit: limitPerQuery, sort }));
+  const searches = selected.map(q => ({ query: q, priceResult: { min: String(minPrice) }, limit: limitPerQuery, sort }));
   const tBatch0 = Date.now();
   const batch = await valuer.batchSearch({ searches, concurrency });
   try {

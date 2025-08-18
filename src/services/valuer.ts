@@ -200,10 +200,12 @@ export class ValuerService {
   async search(query: string, minPrice?: number, maxPrice?: number, limit?: number): Promise<ValuerSearchResponse> {
     const params = new URLSearchParams({
       query,
-      ...(minPrice !== undefined && { 'priceResult[min]': minPrice.toString() }),
-      ...(maxPrice !== undefined && { 'priceResult[max]': maxPrice.toString() }),
       ...(limit !== undefined && { 'limit': limit.toString() })
     });
+    if (minPrice !== undefined || maxPrice !== undefined) {
+      if (minPrice !== undefined) params.append('priceResult[min]', minPrice.toString());
+      if (maxPrice !== undefined) params.append('priceResult[max]', maxPrice.toString());
+    }
 
     // Add sorting by relevance
     params.append('sort', 'relevance');
