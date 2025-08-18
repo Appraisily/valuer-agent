@@ -296,7 +296,11 @@ app.post('/api/multi-search', asyncHandler(async (req, res) => {
   }
 
   const searches = selected.map(q => ({ query: q, 'priceResult[min]': minPrice, limit: limitPerQuery, sort }));
+  const tBatch0 = Date.now();
   const batch = await valuer.batchSearch({ searches, concurrency });
+  try {
+    console.log(`Multi-search batch call returned in ${Date.now() - tBatch0}ms with ${batch?.searches?.length || 0} segments`);
+  } catch {}
 
   // Aggregate compact items for summarization and UI
   type CompactItem = { title?: string; price?: { amount?: number; currency?: string }; auctionHouse?: string; date?: string; url?: string };

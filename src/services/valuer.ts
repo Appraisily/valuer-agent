@@ -329,11 +329,13 @@ export class ValuerService {
     const url = `${this.baseUrl}/batch`;
     console.log(`Executing valuer batch: ${url}`);
     const authHeader = await this.getAuthHeader();
+    const t0 = Date.now();
     const response = await fetchWithRetry(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeader } as any,
       body: JSON.stringify(body)
     });
+    try { console.log(`Valuer batch HTTP completed in ${Date.now() - t0}ms`); } catch {}
     if (!response.ok) {
       const text = await response.text();
       console.error('Valuer batch error:', text);
