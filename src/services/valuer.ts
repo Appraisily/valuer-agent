@@ -33,17 +33,33 @@ function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-async function fetchWithRetry(input: string, init: RequestInit, retry?: Partial<RetryConfig>): Promise<Response> {
+async function fetchWithRetry(
+  input: string,
+  init: RequestInit,
+  retry?: Partial<RetryConfig>,
+  timeoutMs?: number,
+): Promise<Response> {
   const cfg: RetryConfig = {
-    attempts: Math.max(1, Number(process.env.VALUER_RETRY_ATTEMPTS || retry?.attempts || 4)),
-    baseDelayMs: Math.max(100, Number(process.env.VALUER_RETRY_BASE_MS || retry?.baseDelayMs || 500)),
-    maxDelayMs: Math.max(500, Number(process.env.VALUER_RETRY_MAX_MS || retry?.maxDelayMs || 4000)),
+    // Built-in sane defaults prefer code defaults over envs to avoid flags
+    attempts: Math.max(1, Number(retry?.attempts ?? process.env.VALUER_RETRY_ATTEMPTS ?? 2)),
+    baseDelayMs: Math.max(100, Number(retry?.baseDelayMs ?? process.env.VALUER_RETRY_BASE_MS ?? 500)),
+    maxDelayMs: Math.max(500, Number(retry?.maxDelayMs ?? process.env.VALUER_RETRY_MAX_MS ?? 3000)),
   };
 
   let lastError: any;
   for (let attempt = 1; attempt <= cfg.attempts; attempt++) {
     try {
-      const res = await fetch(input, init);
+      // Apply per-request timeout via AbortController
+      const controller = new AbortController();
+      const effectiveTimeout = (() => {
+        if (typeof timeoutMs === 'number' && timeoutMs > 0) return timeoutMs;
+        const envMs = Number(process.env.VALUER_HTTP_TIMEOUT_MS);
+        if (!Number.isNaN(envMs) && envMs > 0) return envMs;
+        return 90_000; // default 90s without flags
+      })();
+      const id = setTimeout(() => controller.abort(new Error('Request timed out')), effectiveTimeout);
+      const res = await fetch(input, { ...init, signal: controller.signal });
+      clearTimeout(id);
       if (res.ok) return res;
       const status = res.status as RetryableStatus | number;
       // Retry only on transient statuses
@@ -117,7 +133,8 @@ export class ValuerService {
    * Returns hits per query in the same ValuerHit shape used by single search.
    */
   async multiSearch(
-    inputs: Array<{ query: string; minPrice?: number; maxPrice?: number; limit?: number }>
+    inputs: Array<{ query: string; minPrice?: number; maxPrice?: number; limit?: number }>,
+    options?: { timeoutMs?: number; retry?: Partial<RetryConfig> }
   ): Promise<Array<{ query: string; hits: ValuerHit[] }>> {
     const body: any = {
       searches: inputs.map((q) => {
@@ -135,7 +152,7 @@ export class ValuerService {
       concurrency: Math.max(1, Number(process.env.VALUER_BATCH_CONCURRENCY || 3)),
     };
 
-    const res = await this.batchSearch(body);
+    const res = await this.batchSearch(body, options);
     const results: Array<{ query: string; hits: ValuerHit[] }> = [];
     const arr = Array.isArray(res?.searches) ? res.searches : [];
 
@@ -197,7 +214,7 @@ export class ValuerService {
    * @param limit Optional limit for the number of results from the API
    * @returns Promise with the raw search results (hits)
    */
-  async search(query: string, minPrice?: number, maxPrice?: number, limit?: number): Promise<ValuerSearchResponse> {
+  async search(query: string, minPrice?: number, maxPrice?: number, limit?: number, options?: { timeoutMs?: number; retry?: Partial<RetryConfig> }): Promise<ValuerSearchResponse> {
     const params = new URLSearchParams({
       query,
       ...(limit !== undefined && { 'limit': limit.toString() })
@@ -213,7 +230,7 @@ export class ValuerService {
     const url = `${this.baseUrl}?${params}`;
     console.log(`Executing valuer search: ${url}`);
     const authHeader = await this.getAuthHeader();
-    const response = await fetchWithRetry(url, { headers: { ...authHeader } as any });
+    const response = await fetchWithRetry(url, { headers: { ...authHeader } as any }, options?.retry, options?.timeoutMs);
 
     if (!response.ok) {
       const errorBody = await response.text();
@@ -246,11 +263,11 @@ export class ValuerService {
    * @param limit Maximum number of results to return *after* merging and sorting (default: 10)
    * @returns Promise with auction results matching the criteria, sorted and limited.
    */
-  async findValuableResults(keyword: string, minPrice: number = 1000, limit: number = 10): Promise<ValuerSearchResponse> {
+  async findValuableResults(keyword: string, minPrice: number = 1000, limit: number = 10, options?: { timeoutMs?: number; retry?: Partial<RetryConfig> }): Promise<ValuerSearchResponse> {
     // Initial search with the original keyword and a potentially larger internal limit
     // Fetch more initially (e.g., limit * 2) to allow for better merging/filtering later
     const initialLimit = limit * 2;
-    let results = await this.search(keyword, minPrice, undefined, initialLimit);
+    let results = await this.search(keyword, minPrice, undefined, initialLimit, options);
     const allHits = [...results.hits];
     const seenTitles = new Set(allHits.map(hit => hit.lotTitle));
 
@@ -267,7 +284,7 @@ export class ValuerService {
           console.log(`Initial search for "${keyword}" yielded ${allHits.length} results (less than limit ${limit}). Retrying with "${significantKeywords}"`);
           // Fetch remaining needed results with the refined query
           const remainingLimit = initialLimit - allHits.length;
-          const additionalResults = await this.search(significantKeywords, minPrice, undefined, remainingLimit > 0 ? remainingLimit : undefined);
+          const additionalResults = await this.search(significantKeywords, minPrice, undefined, remainingLimit > 0 ? remainingLimit : undefined, options);
 
           // Merge results, removing duplicates by title
           additionalResults.hits.forEach(hit => {
@@ -296,10 +313,10 @@ export class ValuerService {
    * @param targetValue Optional target value to define price range
    * @returns Promise with auction results within the price range.
    */
-  async findSimilarItems(description: string, targetValue?: number): Promise<ValuerSearchResponse> {
+  async findSimilarItems(description: string, targetValue?: number, options?: { timeoutMs?: number; retry?: Partial<RetryConfig> }): Promise<ValuerSearchResponse> {
     if (!targetValue) {
       // If no target value, just search with a default limit
-      return this.search(description, undefined, undefined, 20);
+      return this.search(description, undefined, undefined, 20, options);
     }
 
     // Calculate a price range around the target value
@@ -314,7 +331,7 @@ export class ValuerService {
     });
 
     // Search within the calculated price range, limit results
-    return this.search(description, minPrice, maxPrice, 20); // Limit results for similarity search
+    return this.search(description, minPrice, maxPrice, 20, options); // Limit results for similarity search
   }
 
   /**
@@ -327,7 +344,7 @@ export class ValuerService {
     maxPages?: number,
     concurrency?: number,
     saveToGcs?: boolean
-  }): Promise<any> {
+  }, options?: { timeoutMs?: number; retry?: Partial<RetryConfig> }): Promise<any> {
     const url = `${this.baseUrl}/batch`;
     console.log(`Executing valuer batch: ${url}`);
     const authHeader = await this.getAuthHeader();
@@ -336,7 +353,7 @@ export class ValuerService {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeader } as any,
       body: JSON.stringify(body)
-    });
+    }, options?.retry, options?.timeoutMs);
     try { console.log(`Valuer batch HTTP completed in ${Date.now() - t0}ms`); } catch {}
     if (!response.ok) {
       const text = await response.text();

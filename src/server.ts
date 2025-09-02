@@ -255,11 +255,17 @@ const MultiSearchSchema = z.object({
   minPrice: z.number().optional(),
   concurrency: z.number().optional(),
   limitPerQuery: z.number().optional(),
-  sort: z.string().optional()
+  sort: z.string().optional(),
+  timeoutMs: z.number().optional(),
+  retries: z.number().optional(),
+  maxQueries: z.number().optional(),
+  terms: z.array(z.string()).optional(),
+  skipSummary: z.boolean().optional(),
+  maxItems: z.number().optional()
 });
 
 app.post('/api/multi-search', asyncHandler(async (req, res) => {
-  const { description, primaryImageUrl, additionalImageUrls = [], minPrice = Number(process.env.VALUER_MIN_PRICE_DEFAULT || 250), concurrency = Number(process.env.VALUER_BATCH_CONCURRENCY || 5), limitPerQuery = 100, sort = 'relevance' } = MultiSearchSchema.parse(req.body);
+  const { description, primaryImageUrl, additionalImageUrls = [], minPrice = Number(process.env.VALUER_MIN_PRICE_DEFAULT || 250), concurrency = Number(process.env.VALUER_BATCH_CONCURRENCY || 5), limitPerQuery = 100, sort = 'relevance', timeoutMs, retries, maxQueries, terms, skipSummary = false, maxItems } = MultiSearchSchema.parse(req.body);
 
   console.log(`Multi-search request: desc len=${description.length}, minPrice=${minPrice}, concurrency=${concurrency}`);
 
@@ -275,28 +281,45 @@ app.post('/api/multi-search', asyncHandler(async (req, res) => {
   ].join('\n');
 
   let selected: string[] = [];
-  try {
-    const termsJson = await callOpenAIAndParseJson<{ terms: string[] }>(openai, {
-      model: 'gpt-5',
-      systemMessage: 'You are an expert in auction terminology and search optimization. Produce only valid JSON.',
-      userPrompt: keywordPrompt,
-      expectJsonResponse: true
-    });
-    const terms = Array.isArray(termsJson?.terms) ? termsJson.terms : [];
-    selected = terms.slice(0, 5);
-  } catch (e) {
-    console.warn('Keyword generation via GPT-5 failed; falling back to text-only extractor:', (e as Error)?.message || e);
-    const fallback = await keyworder.extractKeywords(description);
-    selected = fallback.slice(0, 5);
+  if (Array.isArray(terms) && terms.length > 0) {
+    selected = Array.from(new Set(terms.map(t => String(t).trim()).filter(Boolean)));
+  } else {
+    try {
+      const termsJson = await callOpenAIAndParseJson<{ terms: string[] }>(openai, {
+        model: 'gpt-5',
+        systemMessage: 'You are an expert in auction terminology and search optimization. Produce only valid JSON.',
+        userPrompt: keywordPrompt,
+        expectJsonResponse: true
+      });
+      const t = Array.isArray(termsJson?.terms) ? termsJson.terms : [];
+      const cap = Math.max(1, Math.min(10, typeof maxQueries === 'number' ? maxQueries : 5));
+      selected = t.slice(0, cap);
+    } catch (e) {
+      console.warn('Keyword generation via GPT-5 failed; falling back to text-only extractor:', (e as Error)?.message || e);
+      const fallback = await keyworder.extractKeywords(description);
+      const cap = Math.max(1, Math.min(10, typeof maxQueries === 'number' ? maxQueries : 5));
+      selected = fallback.slice(0, cap);
+    }
   }
 
   if (selected.length === 0) {
     return res.status(503).json({ success: false, error: 'Failed to generate search terms' });
   }
 
-  const searches = selected.map(q => ({ query: q, priceResult: { min: String(minPrice) }, limit: limitPerQuery, sort }));
+  const perQueryLimit = (() => {
+    const cap = Math.max(1, selected.length || 1);
+    if (typeof maxItems === 'number' && maxItems > 0) {
+      const adaptive = Math.ceil(maxItems / cap);
+      return Math.min(limitPerQuery, Math.max(20, adaptive));
+    }
+    return limitPerQuery;
+  })();
+  const searches = selected.map(q => ({ query: q, priceResult: { min: String(minPrice) }, limit: perQueryLimit, sort }));
   const tBatch0 = Date.now();
-  const batch = await valuer.batchSearch({ searches, concurrency });
+  const batch = await valuer.batchSearch({ searches, concurrency }, {
+    timeoutMs: typeof timeoutMs === 'number' ? timeoutMs : Number(process.env.VALUER_BATCH_HTTP_TIMEOUT_MS || 0) || undefined,
+    retry: typeof retries === 'number' ? { attempts: retries } : undefined,
+  });
   try {
     console.log(`Multi-search batch call returned in ${Date.now() - tBatch0}ms with ${batch?.searches?.length || 0} segments`);
   } catch {}
@@ -305,8 +328,10 @@ app.post('/api/multi-search', asyncHandler(async (req, res) => {
   type CompactItem = { title?: string; price?: { amount?: number; currency?: string }; auctionHouse?: string; date?: string; url?: string };
   const uniqueTitles = new Set<string>();
   const aggregated: CompactItem[] = [];
+  const byQuery: any[] = [];
   for (const s of batch.searches || []) {
     const lots = s?.result?.data?.lots || [];
+    const meta = { query: s?.query || '', lotsCount: Array.isArray(lots) ? lots.length : 0, error: s?.error || undefined };
     for (const lot of lots) {
       const title: string | undefined = lot?.title || lot?.lotTitle;
       if (!title || uniqueTitles.has(title)) continue;
@@ -323,53 +348,58 @@ app.post('/api/multi-search', asyncHandler(async (req, res) => {
       if (aggregated.length >= 100) break;
     }
     if (aggregated.length >= 100) break;
+    byQuery.push({ ...s, meta });
   }
 
-  // Summarize with GPT-5: min/max/mostLikely and pick 10 comparables
+  // Optional summarization with GPT-5
   let summary: { minValue: number; maxValue: number; mostLikelyValue: number; comparableItems: CompactItem[] } | null = null;
-  try {
-    const summaryPrompt = [
-      'Given a JSON array of comparable auction items (title, optional price with currency, house, date, url),',
-      'infer a reasonable minValue, maxValue, and mostLikelyValue (numbers).',
-      'Select the 10 most relevant comparableItems. Return JSON strictly as:',
-      '{ "minValue": number, "maxValue": number, "mostLikelyValue": number, "comparableItems": [ { "title": string, "price": number | null, "currency": string | null, "auctionHouse": string | null, "date": string | null, "url": string | null } ] }',
-      '',
-      `Items JSON: ${JSON.stringify(aggregated.slice(0, 60))}`
-    ].join('\n');
-    const parsed = await callOpenAIAndParseJson<any>(openai, {
-      model: 'gpt-5',
-      systemMessage: 'You are a valuation assistant. Output only valid JSON.',
-      userPrompt: summaryPrompt,
-      expectJsonResponse: true
-    });
-    if (parsed && typeof parsed === 'object') {
-      const items = Array.isArray(parsed.comparableItems) ? parsed.comparableItems.slice(0, 10) : [];
-      summary = {
-        minValue: Number(parsed.minValue || 0),
-        maxValue: Number(parsed.maxValue || 0),
-        mostLikelyValue: Number(parsed.mostLikelyValue || 0),
-        comparableItems: items.map((it: any) => ({
-          title: String(it.title || ''),
-          price: typeof it.price === 'number' ? { amount: it.price, currency: it.currency || 'USD' } : undefined,
-          auctionHouse: it.auctionHouse || null,
-          date: it.date || null,
-          url: it.url || null
-        }))
-      };
+  if (!skipSummary) {
+    try {
+      const summaryPrompt = [
+        'Given a JSON array of comparable auction items (title, optional price with currency, house, date, url),',
+        'infer a reasonable minValue, maxValue, and mostLikelyValue (numbers).',
+        'Select the 10 most relevant comparableItems. Return JSON strictly as:',
+        '{ "minValue": number, "maxValue": number, "mostLikelyValue": number, "comparableItems": [ { "title": string, "price": number | null, "currency": string | null, "auctionHouse": string | null, "date": string | null, "url": string | null } ] }',
+        '',
+        `Items JSON: ${JSON.stringify(aggregated.slice(0, 60))}`
+      ].join('\n');
+      const parsed = await callOpenAIAndParseJson<any>(openai, {
+        model: 'gpt-5',
+        systemMessage: 'You are a valuation assistant. Output only valid JSON.',
+        userPrompt: summaryPrompt,
+        expectJsonResponse: true
+      });
+      if (parsed && typeof parsed === 'object') {
+        const items = Array.isArray(parsed.comparableItems) ? parsed.comparableItems.slice(0, 10) : [];
+        summary = {
+          minValue: Number(parsed.minValue || 0),
+          maxValue: Number(parsed.maxValue || 0),
+          mostLikelyValue: Number(parsed.mostLikelyValue || 0),
+          comparableItems: items.map((it: any) => ({
+            title: String(it.title || ''),
+            price: typeof it.price === 'number' ? { amount: it.price, currency: it.currency || 'USD' } : undefined,
+            auctionHouse: it.auctionHouse || null,
+            date: it.date || null,
+            url: it.url || null
+          }))
+        };
+      }
+    } catch (e) {
+      console.warn('Summarization via GPT-5 failed:', (e as Error)?.message || e);
     }
-  } catch (e) {
-    console.warn('Summarization via GPT-5 failed:', (e as Error)?.message || e);
   }
 
+  const totalLots = aggregated.length;
+  const durationMs = Date.now() - tBatch0;
   res.json({
     success: true,
     generatedQueries: selected,
     sources: { valuerBatch: true },
     data: {
       lots: aggregated,
-      byQuery: batch.searches
+      byQuery
     },
-    stats: batch.batch || { total: searches.length, completed: (batch.searches || []).length },
+    stats: batch.batch || { total: searches.length, completed: (batch.searches || []).length, uniqueLots: uniqueTitles.size, totalLots, durationMs },
     summary: summary || undefined
   });
 }));
