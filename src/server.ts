@@ -253,6 +253,7 @@ const MultiSearchSchema = z.object({
   primaryImageUrl: z.string().url().optional(),
   additionalImageUrls: z.array(z.string().url()).optional(),
   minPrice: z.number().optional(),
+  maxPrice: z.number().optional(),
   concurrency: z.number().optional(),
   limitPerQuery: z.number().optional(),
   sort: z.string().optional(),
@@ -261,13 +262,35 @@ const MultiSearchSchema = z.object({
   maxQueries: z.number().optional(),
   terms: z.array(z.string()).optional(),
   skipSummary: z.boolean().optional(),
-  maxItems: z.number().optional()
+  maxItems: z.number().optional(),
+  // New: allow passing the appraiser's value to run in justification mode
+  targetValue: z.number().optional(),
+  justify: z.boolean().optional()
 });
 
 app.post('/api/multi-search', asyncHandler(async (req, res) => {
-  const { description, primaryImageUrl, additionalImageUrls = [], minPrice = Number(process.env.VALUER_MIN_PRICE_DEFAULT || 250), concurrency = Number(process.env.VALUER_BATCH_CONCURRENCY || 5), limitPerQuery = 100, sort = 'relevance', timeoutMs, retries, maxQueries, terms, skipSummary = false, maxItems } = MultiSearchSchema.parse(req.body);
+  const { description, primaryImageUrl, additionalImageUrls = [], minPrice, maxPrice, concurrency = Number(process.env.VALUER_BATCH_CONCURRENCY || 5), limitPerQuery = 100, sort = 'relevance', timeoutMs, retries, maxQueries, terms, skipSummary = false, maxItems, targetValue, justify } = MultiSearchSchema.parse(req.body);
 
-  console.log(`Multi-search request: desc len=${description.length}, minPrice=${minPrice}, concurrency=${concurrency}`);
+  // Derive min/max around target when in justification mode
+  const justifyMode = Boolean(justify || (typeof targetValue === 'number' && isFinite(targetValue)));
+  const bandPct = Math.max(0.05, Math.min(0.9, Number(process.env.VALUER_JUSTIFY_BAND_PCT || 0.35)));
+  const floorMin = Math.max(0, Number(process.env.VALUER_JUSTIFY_MIN_FLOOR || 100));
+  const effMinPrice = (() => {
+    if (typeof minPrice === 'number') return minPrice;
+    if (justifyMode && typeof targetValue === 'number' && isFinite(targetValue)) {
+      return Math.max(floorMin, Math.floor(targetValue * (1 - bandPct)));
+    }
+    return Number(process.env.VALUER_MIN_PRICE_DEFAULT || 250);
+  })();
+  const effMaxPrice = (() => {
+    if (typeof maxPrice === 'number') return maxPrice;
+    if (justifyMode && typeof targetValue === 'number' && isFinite(targetValue)) {
+      return Math.ceil(targetValue * (1 + bandPct));
+    }
+    return undefined;
+  })();
+
+  console.log(`Multi-search request: desc len=${description.length}, minPrice=${effMinPrice}${effMaxPrice ? `, maxPrice=${effMaxPrice}` : ''}, concurrency=${concurrency}, justify=${justifyMode}`);
 
   // Generate exactly 5 search terms using GPT-5, incorporating image URLs contextually for speed-focused screener
   const imagesList = [primaryImageUrl, ...additionalImageUrls.filter(Boolean)].filter(Boolean).slice(0, 3);
@@ -314,7 +337,11 @@ app.post('/api/multi-search', asyncHandler(async (req, res) => {
     }
     return limitPerQuery;
   })();
-  const searches = selected.map(q => ({ query: q, priceResult: { min: String(minPrice) }, limit: perQueryLimit, sort }));
+  const searches = selected.map(q => {
+    const priceResult: any = { min: String(effMinPrice) };
+    if (typeof effMaxPrice === 'number') priceResult.max = String(effMaxPrice);
+    return ({ query: q, priceResult, limit: perQueryLimit, sort });
+  });
   const tBatch0 = Date.now();
   const batch = await valuer.batchSearch({ searches, concurrency }, {
     timeoutMs: typeof timeoutMs === 'number' ? timeoutMs : Number(process.env.VALUER_BATCH_HTTP_TIMEOUT_MS || 0) || undefined,
@@ -351,18 +378,71 @@ app.post('/api/multi-search', asyncHandler(async (req, res) => {
     byQuery.push({ ...s, meta });
   }
 
+  // Fallback: if nothing found, try again with lower minPrice and broader terms
+  if (aggregated.length === 0) {
+    try {
+      const fallbackMin = Math.max(0, Math.floor((minPrice ?? Number(process.env.VALUER_MIN_PRICE_DEFAULT || '250')) / 2));
+      const altMin = fallbackMin > 0 ? fallbackMin : 100;
+      console.log(`No lots found. Retrying batch with reduced minPrice=${altMin}`);
+      const fallbackSearches = selected.map(q => ({ query: q, priceResult: { min: String(altMin) }, limit: perQueryLimit, sort }));
+      const t1 = Date.now();
+      const batch2 = await valuer.batchSearch({ searches: fallbackSearches, concurrency }, {
+        timeoutMs: typeof timeoutMs === 'number' ? timeoutMs : Number(process.env.VALUER_BATCH_HTTP_TIMEOUT_MS || 0) || undefined,
+        retry: typeof retries === 'number' ? { attempts: retries } : undefined,
+      });
+      console.log(`Fallback batch completed in ${Date.now() - t1}ms with ${batch2?.searches?.length || 0} segments`);
+      for (const s of batch2.searches || []) {
+        const lots = s?.result?.data?.lots || [];
+        const meta = { query: s?.query || '', lotsCount: Array.isArray(lots) ? lots.length : 0, error: s?.error || undefined };
+        for (const lot of lots) {
+          const title: string | undefined = lot?.title || lot?.lotTitle;
+          if (!title || uniqueTitles.has(title)) continue;
+          uniqueTitles.add(title);
+          const priceAmount = (lot?.price && typeof lot.price.amount === 'number') ? lot.price.amount : (typeof lot?.priceResult === 'number' ? lot.priceResult : undefined);
+          const currency = lot?.price?.currency || lot?.currency || lot?.currencyCode || 'USD';
+          aggregated.push({
+            title,
+            price: priceAmount ? { amount: priceAmount, currency } : undefined,
+            auctionHouse: lot?.auctionHouse || lot?.house || lot?.houseName,
+            date: lot?.date || lot?.dateTimeLocal,
+            url: lot?.url || lot?.lotUrl || lot?.permalink
+          });
+          if (aggregated.length >= 100) break;
+        }
+        if (aggregated.length >= 100) break;
+        byQuery.push({ ...s, meta });
+      }
+    } catch (e) {
+      console.warn('Fallback batch failed:', (e as Error)?.message || e);
+    }
+  }
+
   // Optional summarization with GPT-5
   let summary: { minValue: number; maxValue: number; mostLikelyValue: number; comparableItems: CompactItem[] } | null = null;
   if (!skipSummary) {
     try {
-      const summaryPrompt = [
-        'Given a JSON array of comparable auction items (title, optional price with currency, house, date, url),',
-        'infer a reasonable minValue, maxValue, and mostLikelyValue (numbers).',
-        'Select the 10 most relevant comparableItems. Return JSON strictly as:',
-        '{ "minValue": number, "maxValue": number, "mostLikelyValue": number, "comparableItems": [ { "title": string, "price": number | null, "currency": string | null, "auctionHouse": string | null, "date": string | null, "url": string | null } ] }',
-        '',
-        `Items JSON: ${JSON.stringify(aggregated.slice(0, 60))}`
-      ].join('\n');
+      const itemsJson = JSON.stringify(aggregated.slice(0, 60));
+      const summaryPrompt = (() => {
+        if (justifyMode && typeof targetValue === 'number' && isFinite(targetValue)) {
+          return [
+            'You are a valuation assistant. Given comparable auction items and a target appraiser value, assess support for that value.',
+            'Return ONLY JSON with keys: minValue, maxValue, mostLikelyValue, supportLevel ("strong"|"moderate"|"weak"),',
+            'and comparableItems (top 10, same shape as below). Do not include any commentary outside JSON.',
+            '{ "minValue": number, "maxValue": number, "mostLikelyValue": number, "supportLevel": string, "comparableItems": [ { "title": string, "price": number | null, "currency": string | null, "auctionHouse": string | null, "date": string | null, "url": string | null } ] }',
+            '',
+            `Target Value: ${targetValue}`,
+            `Items JSON: ${itemsJson}`
+          ].join('\n');
+        }
+        return [
+          'Given a JSON array of comparable auction items (title, optional price with currency, house, date, url),',
+          'infer a reasonable minValue, maxValue, and mostLikelyValue (numbers).',
+          'Select the 10 most relevant comparableItems. Return JSON strictly as:',
+          '{ "minValue": number, "maxValue": number, "mostLikelyValue": number, "comparableItems": [ { "title": string, "price": number | null, "currency": string | null, "auctionHouse": string | null, "date": string | null, "url": string | null } ] }',
+          '',
+          `Items JSON: ${itemsJson}`
+        ].join('\n');
+      })();
       const parsed = await callOpenAIAndParseJson<any>(openai, {
         model: 'gpt-5',
         systemMessage: 'You are a valuation assistant. Output only valid JSON.',
@@ -371,7 +451,7 @@ app.post('/api/multi-search', asyncHandler(async (req, res) => {
       });
       if (parsed && typeof parsed === 'object') {
         const items = Array.isArray(parsed.comparableItems) ? parsed.comparableItems.slice(0, 10) : [];
-        summary = {
+        const baseSummary: any = {
           minValue: Number(parsed.minValue || 0),
           maxValue: Number(parsed.maxValue || 0),
           mostLikelyValue: Number(parsed.mostLikelyValue || 0),
@@ -383,6 +463,11 @@ app.post('/api/multi-search', asyncHandler(async (req, res) => {
             url: it.url || null
           }))
         };
+        if (justifyMode) {
+          baseSummary.targetValue = targetValue;
+          if (typeof parsed.supportLevel === 'string') baseSummary.supportLevel = String(parsed.supportLevel);
+        }
+        summary = baseSummary as typeof summary;
       }
     } catch (e) {
       console.warn('Summarization via GPT-5 failed:', (e as Error)?.message || e);

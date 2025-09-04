@@ -40,6 +40,14 @@ The application requires the following environment variables:
 - `GOOGLE_CLOUD_PROJECT_ID`: Google Cloud project ID for Secret Manager
 - `PORT`: (Optional) Server port, defaults to 8080
 
+Optional (to improve auction search reliability via Valuer service):
+
+- `INVALUABLE_AZTOKEN_PROD` or `AZTOKEN_PROD`: Invaluable session token
+- `INVALUABLE_CF_CLEARANCE` (and/or `CF_CLEARANCE`): Cloudflare clearance cookie value
+- `VALUER_COOKIES` or `INVALUABLE_COOKIES`: JSON array of cookie objects to forward to Valuer batch (overrides the above if present)
+
+When present, these values are forwarded to the Valuer API so the underlying scraper can authenticate and avoid empty results.
+
 Secrets are managed through Google Cloud Secret Manager. The primary secret required is:
 - `OPENAI_API_KEY`: API key for OpenAI services
 

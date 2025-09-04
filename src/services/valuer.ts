@@ -129,6 +129,28 @@ export class ValuerService {
   }
 
   /**
+   * Build Invaluable cookie objects from env when available.
+   * Supports multiple env names to ease deployment.
+   */
+  private getInvaluableCookies(): Array<{ name: string; value: string; domain?: string; path?: string }> {
+    try {
+      // Allow passing full cookies JSON via VALUER_COOKIES or INVALUABLE_COOKIES
+      const raw = process.env.VALUER_COOKIES || process.env.INVALUABLE_COOKIES;
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed as Array<{ name: string; value: string; domain?: string; path?: string }>;
+      }
+    } catch (_) {}
+
+    const az = process.env.INVALUABLE_AZTOKEN_PROD || process.env.AZTOKEN_PROD || process.env.INVALUABLE_ACT_TOKEN || '';
+    const cf = process.env.INVALUABLE_CF_CLEARANCE || process.env.CF_CLEARANCE || '';
+    const cookies: Array<{ name: string; value: string; domain?: string; path?: string }> = [];
+    if (az) cookies.push({ name: 'AZTOKEN-PROD', value: az, domain: '.invaluable.com', path: '/' });
+    if (cf) cookies.push({ name: 'cf_clearance', value: cf, domain: '.invaluable.com', path: '/' });
+    return cookies;
+  }
+
+  /**
    * Executes multiple searches in a single request via Valuer batch endpoint.
    * Returns hits per query in the same ValuerHit shape used by single search.
    */
@@ -226,6 +248,14 @@ export class ValuerService {
 
     // Add sorting by relevance
     params.append('sort', 'relevance');
+
+    // If cookies are available via env, pass them along in the query for GET endpoint
+    try {
+      const cookies = this.getInvaluableCookies();
+      if (cookies.length > 0) {
+        params.append('cookies', JSON.stringify(cookies));
+      }
+    } catch (_) {}
 
     const url = `${this.baseUrl}?${params}`;
     console.log(`Executing valuer search: ${url}`);
@@ -346,6 +376,15 @@ export class ValuerService {
     saveToGcs?: boolean
   }, options?: { timeoutMs?: number; retry?: Partial<RetryConfig> }): Promise<any> {
     const url = `${this.baseUrl}/batch`;
+    // Provide cookies from env if not supplied by caller
+    try {
+      if (!Array.isArray(body.cookies) || body.cookies.length === 0) {
+        const cookies = this.getInvaluableCookies();
+        if (cookies.length > 0) {
+          (body as any).cookies = cookies;
+        }
+      }
+    } catch (_) {}
     console.log(`Executing valuer batch: ${url}`);
     const authHeader = await this.getAuthHeader();
     const t0 = Date.now();
