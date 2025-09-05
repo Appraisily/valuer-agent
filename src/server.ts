@@ -3,6 +3,7 @@ import { z, ZodError } from 'zod';
 import OpenAI from 'openai';
 import { SecretManagerServiceClient } from '@google-cloud/secret-manager';
 import { ValuerService } from './services/valuer.js';
+import { buildQueryPyramid, flattenPyramid } from './services/query-pyramid.js';
 import { callOpenAIAndParseJson } from './services/utils/openai-helper.js';
 import { KeywordExtractionService } from './services/keyword-extraction.service.js';
 import { JustifierAgent } from './services/justifier-agent.js';
@@ -265,11 +266,21 @@ const MultiSearchSchema = z.object({
   maxItems: z.number().optional(),
   // New: allow passing the appraiser's value to run in justification mode
   targetValue: z.number().optional(),
-  justify: z.boolean().optional()
+  justify: z.boolean().optional(),
+  // Pyramid controls and structured hints
+  usePyramid: z.boolean().optional(),
+  category: z.string().optional(),
+  maker: z.string().optional(),
+  brand: z.string().optional(),
+  model: z.string().optional(),
+  subject: z.string().optional(),
+  styleEra: z.string().optional(),
+  mediumMaterial: z.string().optional(),
+  region: z.string().optional()
 });
 
 app.post('/api/multi-search', asyncHandler(async (req, res) => {
-  const { description, primaryImageUrl, additionalImageUrls = [], minPrice, maxPrice, concurrency = Number(process.env.VALUER_BATCH_CONCURRENCY || 5), limitPerQuery = 100, sort = 'relevance', timeoutMs, retries, maxQueries, terms, skipSummary = false, maxItems, targetValue, justify } = MultiSearchSchema.parse(req.body);
+  const { description, primaryImageUrl, additionalImageUrls = [], minPrice, maxPrice, concurrency = Number(process.env.VALUER_BATCH_CONCURRENCY || 5), limitPerQuery = 100, sort = 'relevance', timeoutMs, retries, maxQueries, terms, skipSummary = false, maxItems, targetValue, justify, usePyramid, category, maker, brand, model, subject, styleEra, mediumMaterial, region } = MultiSearchSchema.parse(req.body);
 
   // Derive min/max around target when in justification mode
   const justifyMode = Boolean(justify || (typeof targetValue === 'number' && isFinite(targetValue)));
@@ -292,7 +303,7 @@ app.post('/api/multi-search', asyncHandler(async (req, res) => {
 
   console.log(`Multi-search request: desc len=${description.length}, minPrice=${effMinPrice}${effMaxPrice ? `, maxPrice=${effMaxPrice}` : ''}, concurrency=${concurrency}, justify=${justifyMode}`);
 
-  // Generate exactly 5 search terms using GPT-5, incorporating image URLs contextually for speed-focused screener
+  // Generate search terms using the domain-aware pyramid when requested or when no explicit terms are passed.
   const imagesList = [primaryImageUrl, ...additionalImageUrls.filter(Boolean)].filter(Boolean).slice(0, 3);
   const keywordPrompt = [
     'Generate EXACTLY 5 auction search terms (short, standard catalog terms) for finding comparable items.',
@@ -306,6 +317,11 @@ app.post('/api/multi-search', asyncHandler(async (req, res) => {
   let selected: string[] = [];
   if (Array.isArray(terms) && terms.length > 0) {
     selected = Array.from(new Set(terms.map(t => String(t).trim()).filter(Boolean)));
+  } else if (usePyramid === true || process.env.VALUER_USE_PYRAMID === 'true') {
+    const pyramid = buildQueryPyramid({ description, category, maker, brand, model, subject, styleEra, mediumMaterial, region });
+    const cap = Math.max(1, Math.min(20, typeof maxQueries === 'number' ? maxQueries : 10));
+    selected = flattenPyramid(pyramid, cap);
+    console.log(`Using pyramid queries (${selected.length}): ${selected.join(' | ')}`);
   } else {
     try {
       const termsJson = await callOpenAIAndParseJson<{ terms: string[] }>(openai, {
