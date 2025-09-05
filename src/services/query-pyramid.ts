@@ -273,8 +273,8 @@ export function buildQueryPyramid(input: PyramidInput): QueryGroups {
 }
 
 export function flattenPyramid(groups: QueryGroups, max?: number): string[] {
-  // Order: moderate -> specific -> very specific -> broad -> very broad
-  const order: Array<keyof QueryGroups> = ['moderate', 'specific', 'very specific', 'broad', 'very broad'];
+  // Default order: most specific to broad
+  const order: Array<keyof QueryGroups> = ['very specific', 'specific', 'moderate', 'broad', 'very broad'];
   const out: string[] = [];
   for (const key of order) {
     for (const term of groups[key] || []) {

@@ -280,7 +280,7 @@ const MultiSearchSchema = z.object({
 });
 
 app.post('/api/multi-search', asyncHandler(async (req, res) => {
-  const { description, primaryImageUrl, additionalImageUrls = [], minPrice, maxPrice, concurrency = Number(process.env.VALUER_BATCH_CONCURRENCY || 5), limitPerQuery = 100, sort = 'relevance', timeoutMs, retries, maxQueries, terms, skipSummary = false, maxItems, targetValue, justify, usePyramid, category, maker, brand, model, subject, styleEra, mediumMaterial, region } = MultiSearchSchema.parse(req.body);
+  const { description, primaryImageUrl, additionalImageUrls = [], minPrice, maxPrice, concurrency = Number(process.env.VALUER_BATCH_CONCURRENCY || 5), limitPerQuery = 100, sort = 'relevance', timeoutMs, retries, maxQueries, terms, skipSummary = false, maxItems, targetValue, justify, category, maker, brand, model, subject, styleEra, mediumMaterial, region } = MultiSearchSchema.parse(req.body);
 
   // Derive min/max around target when in justification mode
   const justifyMode = Boolean(justify || (typeof targetValue === 'number' && isFinite(targetValue)));
@@ -317,27 +317,31 @@ app.post('/api/multi-search', asyncHandler(async (req, res) => {
   let selected: string[] = [];
   if (Array.isArray(terms) && terms.length > 0) {
     selected = Array.from(new Set(terms.map(t => String(t).trim()).filter(Boolean)));
-  } else if (usePyramid === true || process.env.VALUER_USE_PYRAMID === 'true') {
-    const pyramid = buildQueryPyramid({ description, category, maker, brand, model, subject, styleEra, mediumMaterial, region });
-    const cap = Math.max(1, Math.min(20, typeof maxQueries === 'number' ? maxQueries : 10));
-    selected = flattenPyramid(pyramid, cap);
-    console.log(`Using pyramid queries (${selected.length}): ${selected.join(' | ')}`);
   } else {
+    // Default: use pyramid (specific -> broad). Fallback to GPT extraction only if pyramid fails
     try {
-      const termsJson = await callOpenAIAndParseJson<{ terms: string[] }>(openai, {
-        model: 'gpt-5',
-        systemMessage: 'You are an expert in auction terminology and search optimization. Produce only valid JSON.',
-        userPrompt: keywordPrompt,
-        expectJsonResponse: true
-      });
-      const t = Array.isArray(termsJson?.terms) ? termsJson.terms : [];
-      const cap = Math.max(1, Math.min(10, typeof maxQueries === 'number' ? maxQueries : 5));
-      selected = t.slice(0, cap);
+      const pyramid = buildQueryPyramid({ description, category, maker, brand, model, subject, styleEra, mediumMaterial, region });
+      const cap = Math.max(1, Math.min(20, typeof maxQueries === 'number' ? maxQueries : 10));
+      selected = flattenPyramid(pyramid, cap);
+      console.log(`Using pyramid queries (${selected.length}): ${selected.join(' | ')}`);
     } catch (e) {
-      console.warn('Keyword generation via GPT-5 failed; falling back to text-only extractor:', (e as Error)?.message || e);
-      const fallback = await keyworder.extractKeywords(description);
-      const cap = Math.max(1, Math.min(10, typeof maxQueries === 'number' ? maxQueries : 5));
-      selected = fallback.slice(0, cap);
+      console.warn('Pyramid query build failed; falling back to keyword generation:', (e as Error)?.message || e);
+      try {
+        const termsJson = await callOpenAIAndParseJson<{ terms: string[] }>(openai, {
+          model: 'gpt-5',
+          systemMessage: 'You are an expert in auction terminology and search optimization. Produce only valid JSON.',
+          userPrompt: keywordPrompt,
+          expectJsonResponse: true
+        });
+        const t = Array.isArray(termsJson?.terms) ? termsJson.terms : [];
+        const cap = Math.max(1, Math.min(10, typeof maxQueries === 'number' ? maxQueries : 5));
+        selected = t.slice(0, cap);
+      } catch (e2) {
+        console.warn('Keyword generation via GPT-5 failed; falling back to text-only extractor:', (e2 as Error)?.message || e2);
+        const fallback = await keyworder.extractKeywords(description);
+        const cap = Math.max(1, Math.min(10, typeof maxQueries === 'number' ? maxQueries : 5));
+        selected = fallback.slice(0, cap);
+      }
     }
   }
 
@@ -353,46 +357,83 @@ app.post('/api/multi-search', asyncHandler(async (req, res) => {
     }
     return limitPerQuery;
   })();
-  const searches = selected.map(q => {
-    const priceResult: any = { min: String(effMinPrice) };
-    if (typeof effMaxPrice === 'number') priceResult.max = String(effMaxPrice);
-    return ({ query: q, priceResult, limit: perQueryLimit, sort });
-  });
+  const EARLY_STOP_AT = Number(process.env.VALUER_EARLY_STOP_AT || 100);
   const tBatch0 = Date.now();
-  const batch = await valuer.batchSearch({ searches, concurrency }, {
-    timeoutMs: typeof timeoutMs === 'number' ? timeoutMs : Number(process.env.VALUER_BATCH_HTTP_TIMEOUT_MS || 0) || undefined,
-    retry: typeof retries === 'number' ? { attempts: retries } : undefined,
-  });
-  try {
-    console.log(`Multi-search batch call returned in ${Date.now() - tBatch0}ms with ${batch?.searches?.length || 0} segments`);
-  } catch {}
-
   // Aggregate compact items for summarization and UI
   type CompactItem = { title?: string; price?: { amount?: number; currency?: string }; auctionHouse?: string; date?: string; url?: string };
   const uniqueTitles = new Set<string>();
   const aggregated: CompactItem[] = [];
   const byQuery: any[] = [];
-  for (const s of batch.searches || []) {
-    const lots = s?.result?.data?.lots || [];
-    const meta = { query: s?.query || '', lotsCount: Array.isArray(lots) ? lots.length : 0, error: s?.error || undefined };
-    for (const lot of lots) {
-      const title: string | undefined = lot?.title || lot?.lotTitle;
-      if (!title || uniqueTitles.has(title)) continue;
-      uniqueTitles.add(title);
-      const priceAmount = (lot?.price && typeof lot.price.amount === 'number') ? lot.price.amount : (typeof lot?.priceResult === 'number' ? lot.priceResult : undefined);
-      const currency = lot?.price?.currency || lot?.currency || lot?.currencyCode || 'USD';
-      aggregated.push({
-        title,
-        price: priceAmount ? { amount: priceAmount, currency } : undefined,
-        auctionHouse: lot?.auctionHouse || lot?.house || lot?.houseName,
-        date: lot?.date || lot?.dateTimeLocal,
-        url: lot?.url || lot?.lotUrl || lot?.permalink
-      });
-      if (aggregated.length >= 100) break;
+  const allExecutedQueries: string[] = [];
+  let cumulativeStats = { total: 0, completed: 0, failed: 0, durationMs: 0 };
+  const pyramidRun = buildQueryPyramid({ description, category, maker, brand, model, subject, styleEra, mediumMaterial, region });
+  const tiers: Array<{ name: string; terms: string[] }> = [
+    { name: 'very specific', terms: pyramidRun['very specific'] || [] },
+    { name: 'specific', terms: pyramidRun['specific'] || [] },
+    { name: 'moderate', terms: pyramidRun['moderate'] || [] },
+    { name: 'broad', terms: pyramidRun['broad'] || [] },
+    { name: 'very broad', terms: pyramidRun['very broad'] || [] },
+  ];
+
+  let remainingBudget = typeof maxQueries === 'number' ? Math.max(1, maxQueries) : Infinity;
+  for (const tier of tiers) {
+    if (remainingBudget <= 0) break;
+    const tierTerms = tier.terms.filter(Boolean).slice(0, remainingBudget);
+    if (tierTerms.length === 0) continue;
+
+    const searchesTier = tierTerms.map(q => {
+      const priceResult: any = { min: String(effMinPrice) };
+      if (typeof effMaxPrice === 'number') priceResult.max = String(effMaxPrice);
+      return ({ query: q, priceResult, limit: perQueryLimit, sort });
+    });
+
+    const t0 = Date.now();
+    const batchTier = await valuer.batchSearch({ searches: searchesTier, concurrency: Math.min(concurrency, searchesTier.length) }, {
+      timeoutMs: typeof timeoutMs === 'number' ? timeoutMs : Number(process.env.VALUER_BATCH_HTTP_TIMEOUT_MS || 0) || undefined,
+      retry: typeof retries === 'number' ? { attempts: retries } : undefined,
+    });
+    const tierDuration = Date.now() - t0;
+    console.log(`Batch search completed: total=${batchTier?.batch?.total || searchesTier.length}, completed=${batchTier?.batch?.completed || 0}, failed=${batchTier?.batch?.failed || 0}, concurrency=${Math.min(concurrency, searchesTier.length)}, durationMs=${tierDuration}`);
+    cumulativeStats.total += batchTier?.batch?.total || searchesTier.length;
+    cumulativeStats.completed += batchTier?.batch?.completed || 0;
+    cumulativeStats.failed += batchTier?.batch?.failed || 0;
+    cumulativeStats.durationMs += tierDuration;
+
+    allExecutedQueries.push(...tierTerms);
+    remainingBudget = isFinite(remainingBudget) ? Math.max(0, remainingBudget - tierTerms.length) : remainingBudget;
+
+    const preCount = aggregated.length;
+    for (const s of batchTier.searches || []) {
+      const lots = s?.result?.data?.lots || [];
+      const meta = { query: s?.query || '', lotsCount: Array.isArray(lots) ? lots.length : 0, error: s?.error || undefined };
+      for (const lot of lots) {
+        const title: string | undefined = lot?.title || lot?.lotTitle;
+        if (!title || uniqueTitles.has(title)) continue;
+        uniqueTitles.add(title);
+        const priceAmount = (lot?.price && typeof lot.price.amount === 'number') ? lot.price.amount : (typeof lot?.priceResult === 'number' ? lot.priceResult : undefined);
+        const currency = lot?.price?.currency || lot?.currency || lot?.currencyCode || 'USD';
+        aggregated.push({
+          title,
+          price: priceAmount ? { amount: priceAmount, currency } : undefined,
+          auctionHouse: lot?.auctionHouse || lot?.house || lot?.houseName,
+          date: lot?.date || lot?.dateTimeLocal,
+          url: lot?.url || lot?.lotUrl || lot?.permalink
+        });
+        if (aggregated.length >= EARLY_STOP_AT) break;
+      }
+      if (aggregated.length >= EARLY_STOP_AT) break;
+      byQuery.push({ ...s, meta });
     }
-    if (aggregated.length >= 100) break;
-    byQuery.push({ ...s, meta });
+    const added = aggregated.length - preCount;
+    console.log(`Tier="${tier.name}" contributed ${added} unique lots (total=${aggregated.length})`);
+    if (aggregated.length >= EARLY_STOP_AT) {
+      console.log(`Early stop reached at ${EARLY_STOP_AT} unique lots. Halting further tiers.`);
+      break;
+    }
   }
+
+  // Compose a pseudo batch for response compatibility
+  const batch = { batch: cumulativeStats, searches: byQuery } as any;
 
   // Fallback: if nothing found, try again with lower minPrice and broader terms
   if (aggregated.length === 0) {
@@ -400,7 +441,8 @@ app.post('/api/multi-search', asyncHandler(async (req, res) => {
       const fallbackMin = Math.max(0, Math.floor((minPrice ?? Number(process.env.VALUER_MIN_PRICE_DEFAULT || '250')) / 2));
       const altMin = fallbackMin > 0 ? fallbackMin : 100;
       console.log(`No lots found. Retrying batch with reduced minPrice=${altMin}`);
-      const fallbackSearches = selected.map(q => ({ query: q, priceResult: { min: String(altMin) }, limit: perQueryLimit, sort }));
+      const fallbackQueries = (allExecutedQueries.length > 0 ? allExecutedQueries : selected);
+      const fallbackSearches = fallbackQueries.map(q => ({ query: q, priceResult: { min: String(altMin) }, limit: perQueryLimit, sort }));
       const t1 = Date.now();
       const batch2 = await valuer.batchSearch({ searches: fallbackSearches, concurrency }, {
         timeoutMs: typeof timeoutMs === 'number' ? timeoutMs : Number(process.env.VALUER_BATCH_HTTP_TIMEOUT_MS || 0) || undefined,
@@ -494,13 +536,13 @@ app.post('/api/multi-search', asyncHandler(async (req, res) => {
   const durationMs = Date.now() - tBatch0;
   res.json({
     success: true,
-    generatedQueries: selected,
+    generatedQueries: allExecutedQueries.length > 0 ? allExecutedQueries : selected,
     sources: { valuerBatch: true },
     data: {
       lots: aggregated,
       byQuery
     },
-    stats: batch.batch || { total: searches.length, completed: (batch.searches || []).length, uniqueLots: uniqueTitles.size, totalLots, durationMs },
+    stats: { ...batch.batch, uniqueLots: uniqueTitles.size, totalLots, durationMs },
     summary: summary || undefined
   });
 }));
