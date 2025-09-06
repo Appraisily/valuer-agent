@@ -388,19 +388,43 @@ app.post('/api/multi-search', asyncHandler(async (req, res) => {
   const byQuery: any[] = [];
   const allExecutedQueries: string[] = [];
   let cumulativeStats = { total: 0, completed: 0, failed: 0, durationMs: 0 };
-  const pyramidRun = buildQueryPyramid({ description, category, maker, brand, model, subject, styleEra, mediumMaterial, region });
-  const tiers: Array<{ name: string; terms: string[] }> = [
-    { name: 'very specific', terms: pyramidRun['very specific'] || [] },
-    { name: 'specific', terms: pyramidRun['specific'] || [] },
-    { name: 'moderate', terms: pyramidRun['moderate'] || [] },
-    { name: 'broad', terms: pyramidRun['broad'] || [] },
-    { name: 'very broad', terms: pyramidRun['very broad'] || [] },
-  ];
+  // Build tiered queries. Prefer caller-provided terms when present to keep WS as the owner of term generation.
+  let tiers: Array<{ name: string; terms: string[] }>;
+  if (Array.isArray(terms) && terms.length > 0) {
+    // Distribute provided terms across specific → moderate → broad to spread the budget.
+    const src = Array.from(new Set(terms.map(t => String(t).trim()).filter(Boolean)));
+    const perBucket = Math.max(1, Math.ceil(src.length / 3));
+    const specificTerms = src.slice(0, perBucket);
+    const moderateTerms = src.slice(perBucket, perBucket * 2);
+    const broadTerms = src.slice(perBucket * 2);
+    tiers = [
+      { name: 'specific', terms: specificTerms },
+      { name: 'moderate', terms: moderateTerms },
+      { name: 'broad', terms: broadTerms },
+    ];
+  } else {
+    const pyramidRun = buildQueryPyramid({ description, category, maker, brand, model, subject, styleEra, mediumMaterial, region });
+    tiers = [
+      { name: 'very specific', terms: pyramidRun['very specific'] || [] },
+      { name: 'specific', terms: pyramidRun['specific'] || [] },
+      { name: 'moderate', terms: pyramidRun['moderate'] || [] },
+      { name: 'broad', terms: pyramidRun['broad'] || [] },
+      { name: 'very broad', terms: pyramidRun['very broad'] || [] },
+    ];
+  }
 
   let remainingBudget = typeof maxQueries === 'number' ? Math.max(1, maxQueries) : Infinity;
-  for (const tier of tiers) {
+  for (let i = 0; i < tiers.length; i++) {
+    const tier = tiers[i];
     if (remainingBudget <= 0) break;
-    const tierTerms = tier.terms.filter(Boolean).slice(0, remainingBudget);
+    const clean = tier.terms.filter(Boolean);
+    // Try to ensure we execute at least `concurrency` queries per tier when possible,
+    // while not exceeding the remaining overall budget and spreading across tiers.
+    const tiersLeft = (tiers.length - i);
+    const spread = Math.ceil(remainingBudget / Math.max(1, tiersLeft));
+    const desiredForTier = Math.max(concurrency, spread);
+    const takeCount = Math.min(remainingBudget, Math.min(desiredForTier, clean.length));
+    const tierTerms = clean.slice(0, takeCount);
     if (tierTerms.length === 0) continue;
 
     const searchesTier = tierTerms.map(q => {
