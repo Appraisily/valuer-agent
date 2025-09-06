@@ -434,7 +434,12 @@ app.post('/api/multi-search', asyncHandler(async (req, res) => {
     });
 
     const t0 = Date.now();
-    const batchTier = await valuer.batchSearch({ searches: searchesTier, concurrency: Math.min(concurrency, searchesTier.length) }, {
+    const batchTier = await valuer.batchSearch({
+      searches: searchesTier,
+      concurrency: Math.min(concurrency, searchesTier.length),
+      // Fetch ONLY the first page per query
+      fetchAllPages: false
+    }, {
       timeoutMs: typeof timeoutMs === 'number' ? timeoutMs : Number(process.env.VALUER_BATCH_HTTP_TIMEOUT_MS || 0) || undefined,
       retry: typeof retries === 'number' ? { attempts: retries } : undefined,
     });
@@ -490,7 +495,12 @@ app.post('/api/multi-search', asyncHandler(async (req, res) => {
       const fallbackQueries = (allExecutedQueries.length > 0 ? allExecutedQueries : selected);
       const fallbackSearches = fallbackQueries.map(q => ({ query: q, priceResult: { min: String(altMin) }, limit: perQueryLimit, sort }));
       const t1 = Date.now();
-      const batch2 = await valuer.batchSearch({ searches: fallbackSearches, concurrency }, {
+      const batch2 = await valuer.batchSearch({
+        searches: fallbackSearches,
+        concurrency,
+        // Fetch ONLY the first page per query
+        fetchAllPages: false
+      }, {
         timeoutMs: typeof timeoutMs === 'number' ? timeoutMs : Number(process.env.VALUER_BATCH_HTTP_TIMEOUT_MS || 0) || undefined,
         retry: typeof retries === 'number' ? { attempts: retries } : undefined,
       });
