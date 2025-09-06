@@ -114,7 +114,9 @@ Retrieves and processes market data for analysis.
 
 ## API Endpoints
 
-### POST /api/justify
+### POST /api/justify [Deprecated]
+This endpoint is deprecated. Use `POST /api/multi-search` with `{ justify: true, targetValue }` for combined search + justification and a structured summary.
+
 Justifies a valuation based on item description and proposed value.
 
 **Request Schema:**
@@ -132,6 +134,20 @@ Justifies a valuation based on item description and proposed value.
   "explanation": "string",
   "auctionResults": [...],
   "allSearchResults": [...]
+}
+```
+
+### POST /api/multi-search (with justification)
+Performs concurrent term searches. When called with `justify:true` and a `targetValue`, it narrows the price band and returns a `summary` including `{ minValue, maxValue, mostLikelyValue, supportLevel?, comparableItems[] }`.
+
+Example request:
+```json
+{
+  "description": "Antique Victorian mahogany dining table, circa 1860",
+  "targetValue": 2500,
+  "justify": true,
+  "maxQueries": 5,
+  "limitPerQuery": 50
 }
 ```
 

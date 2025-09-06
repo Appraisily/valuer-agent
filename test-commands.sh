@@ -22,12 +22,23 @@ curl -X POST "${BASE_URL}/api/find-value-range" \
     "text": "Antique Victorian mahogany dining table, circa 1860"
   }' | json_pp
 
-echo -e "\n${BLUE}Testing Justify Value endpoint${NC}"
+echo -e "\n${BLUE}Testing Justify Value endpoint (DEPRECATED)${NC}"
 curl -X POST "${BASE_URL}/api/justify" \
   -H "Content-Type: application/json" \
   -d '{
     "text": "Antique Victorian mahogany dining table, circa 1860",
     "value": 2500
+  }' | json_pp
+
+echo -e "\n${BLUE}Testing Multi-Search with justification (preferred)${NC}"
+curl -X POST "${BASE_URL}/api/multi-search" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "description": "Antique Victorian mahogany dining table, circa 1860",
+    "targetValue": 2500,
+    "justify": true,
+    "maxQueries": 5,
+    "limitPerQuery": 50
   }' | json_pp
 
 echo -e "\n${BLUE}Testing Auction Results endpoint${NC}"

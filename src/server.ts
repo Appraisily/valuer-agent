@@ -177,13 +177,35 @@ app.use('/api/enhanced-statistics', checkServicesInitialized);
 
 
 app.post('/api/justify', asyncHandler(async (req, res) => {
+  const mode = String(process.env.VALUER_JUSTIFY_DEPRECATION_MODE || 'notice');
+  if (mode === 'gone') {
+    res.set('Deprecation', 'true');
+    res.set('Link', '</api/multi-search>; rel="alternate"');
+    return res.status(410).json({
+      success: false,
+      error: 'Endpoint deprecated. Use /api/multi-search with { justify: true, targetValue }.',
+      alternative: {
+        endpoint: '/api/multi-search',
+        body: { description: '...', targetValue: 2500, justify: true }
+      }
+    });
+  }
   // Initialization check is done by middleware
   // Error handling is done by middleware
 
   const { text, value } = RequestSchema.parse(req.body);
   const result = await justifier.justify(text, value);
+  res.set('Deprecation', 'true');
+  res.set('Sunset', 'Fri, 31 Oct 2025 00:00:00 GMT');
+  res.set('Link', '</api/multi-search>; rel="alternate"');
+  console.warn('DEPRECATION: /api/justify is deprecated. Use /api/multi-search with { justify: true, targetValue }');
   res.json({
     success: true,
+    deprecation: {
+      message: 'This endpoint is deprecated and will be removed. Use /api/multi-search with { justify: true, targetValue }.',
+      alternative: { endpoint: '/api/multi-search', body: { description: '...', targetValue: value, justify: true } },
+      sunset: '2025-10-31T00:00:00.000Z'
+    },
     explanation: result.explanation,
     auctionResults: result.auctionResults,
     allSearchResults: result.allSearchResults
