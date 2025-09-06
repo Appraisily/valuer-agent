@@ -497,9 +497,29 @@ app.post('/api/multi-search', asyncHandler(async (req, res) => {
     }
   }
 
+  // Optional category filtering to reduce cross-domain drift
+  const isFineArt = String(category || '').toLowerCase() === 'fine_art';
+  if (isFineArt && aggregated.length) {
+    const fineArtPattern = /(paint|oil|acrylic|canvas|panel|watercolor|gouache|tempera|lithograph|etch(ing)?|engraving|drawing|print)/i;
+    const bannedPattern = /(coin|dukat|ducat|solidus|brooch|ring|jewelry|jewel|armor|samurai|pen\b|nautilus|shell|diamond|lapis|925\b|silver|gold|map|rookie card)/i;
+    const filtered = aggregated.filter((lot) => {
+      const title = String(lot?.title || '').toLowerCase();
+      if (!title) return false;
+      if (bannedPattern.test(title)) return false;
+      return fineArtPattern.test(title);
+    });
+    if (filtered.length > 0) {
+      console.log(`Applied fine_art filter: reduced lots from ${aggregated.length} to ${filtered.length}`);
+      aggregated = filtered;
+    }
+  }
+
   // Optional summarization with GPT-5
   let summary: { minValue: number; maxValue: number; mostLikelyValue: number; comparableItems: CompactItem[] } | null = null;
-  if (!skipSummary) {
+  const forceSkipEnv = String(process.env.VALUER_FORCE_SKIP_SUMMARY || '').toLowerCase();
+  const forceSkip = ['1','true','yes','on'].includes(forceSkipEnv);
+  const doSummarize = !skipSummary && !forceSkip;
+  if (doSummarize) {
     try {
       const itemsJson = JSON.stringify(aggregated.slice(0, 60));
       const summaryPrompt = (() => {
