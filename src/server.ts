@@ -394,7 +394,7 @@ app.post('/api/multi-search', asyncHandler(async (req, res) => {
   // Aggregate compact items for summarization and UI
   type CompactItem = { title?: string; price?: { amount?: number; currency?: string }; auctionHouse?: string; date?: string; url?: string };
   const uniqueTitles = new Set<string>();
-  const aggregated: CompactItem[] = [];
+  let aggregated: CompactItem[] = [];
   const byQuery: any[] = [];
   const allExecutedQueries: string[] = [];
   let cumulativeStats = { total: 0, completed: 0, failed: 0, durationMs: 0 };
@@ -493,8 +493,7 @@ app.post('/api/multi-search', asyncHandler(async (req, res) => {
     }
   }
 
-  // Compose a pseudo batch for response compatibility
-  const batch = { batch: cumulativeStats, searches: byQuery } as any;
+  // Aggregation complete; proceed to optional fallback if needed
 
   // Fallback: if nothing found, try again with lower minPrice and broader terms
   if (aggregated.length === 0) {
@@ -628,7 +627,7 @@ app.post('/api/multi-search', asyncHandler(async (req, res) => {
       lots: aggregated,
       byQuery
     },
-    stats: { ...batch.batch, uniqueLots: uniqueTitles.size, totalLots, durationMs },
+    stats: { ...cumulativeStats, uniqueLots: uniqueTitles.size, totalLots, durationMs },
     summary: summary || undefined
   });
 }));
