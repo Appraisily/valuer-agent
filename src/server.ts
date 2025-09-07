@@ -306,19 +306,29 @@ app.post('/api/multi-search', asyncHandler(async (req, res) => {
 
   // Derive min/max around target when in justification mode
   const justifyMode = Boolean(justify || (typeof targetValue === 'number' && isFinite(targetValue)));
-  const bandPct = Math.max(0.05, Math.min(0.9, Number(process.env.VALUER_JUSTIFY_BAND_PCT || 0.35)));
+  // Use asymmetric band around appraiser value (default: 50%–200%)
+  const bandLow = (() => {
+    const v = Number(process.env.VALUER_JUSTIFY_LOW_FACTOR);
+    if (Number.isFinite(v) && v > 0 && v < 1) return v;
+    return 0.5;
+  })();
+  const bandHigh = (() => {
+    const v = Number(process.env.VALUER_JUSTIFY_HIGH_FACTOR);
+    if (Number.isFinite(v) && v > 1) return v;
+    return 2.0;
+  })();
   const floorMin = Math.max(0, Number(process.env.VALUER_JUSTIFY_MIN_FLOOR || 100));
   const effMinPrice = (() => {
     if (typeof minPrice === 'number') return minPrice;
     if (justifyMode && typeof targetValue === 'number' && isFinite(targetValue)) {
-      return Math.max(floorMin, Math.floor(targetValue * (1 - bandPct)));
+      return Math.max(floorMin, Math.floor(targetValue * bandLow));
     }
     return Number(process.env.VALUER_MIN_PRICE_DEFAULT || 250);
   })();
   const effMaxPrice = (() => {
     if (typeof maxPrice === 'number') return maxPrice;
     if (justifyMode && typeof targetValue === 'number' && isFinite(targetValue)) {
-      return Math.ceil(targetValue * (1 + bandPct));
+      return Math.ceil(targetValue * bandHigh);
     }
     return undefined;
   })();
