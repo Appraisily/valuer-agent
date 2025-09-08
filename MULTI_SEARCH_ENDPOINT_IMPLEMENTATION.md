@@ -1,5 +1,7 @@
 ### Multi-search endpoint and single-browser/multi-tab workflow (valuer-agent + valuer)
 
+Note: In current production deployment, valuer-agent requires caller-provided `terms[]` and does not generate search terms. The design below documents the generic capability and historical approach; upstream services (e.g., appraisals-web-services) now own term generation and tiering.
+
 This document proposes a minimal-change implementation to reduce request bursts and browser churn by introducing:
 
 - A batch/multi-search endpoint on `valuer` that executes multiple queries using a single browser instance with multiple tabs and bounded concurrency.

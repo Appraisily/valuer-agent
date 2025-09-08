@@ -140,14 +140,34 @@ Justifies a valuation based on item description and proposed value.
 ### POST /api/multi-search (with justification)
 Performs concurrent term searches. When called with `justify:true` and a `targetValue`, it narrows the price band and returns a `summary` including `{ minValue, maxValue, mostLikelyValue, supportLevel?, comparableItems[] }`.
 
-Example request:
+Notes (current deployment behavior):
+- `terms` is required. This service does not generate search terms when `terms` is missing/empty. Upstream callers (e.g., web‑services) own term generation and grouping.
+- `description` may be an empty string when `terms` are provided — this is expected.
+- Concurrency is honored per batch (typically 3), and an early‑stop of 100 unique lots is applied (`VALUER_EARLY_STOP_AT`, default 100).
+
+Example request (preferred):
 ```json
 {
-  "description": "Antique Victorian mahogany dining table, circa 1860",
-  "targetValue": 2500,
-  "justify": true,
-  "maxQueries": 5,
-  "limitPerQuery": 50
+  "description": "",
+  "terms": [
+    "surrealist color lithograph tents",
+    "limited edition lithograph red tents",
+    "desert surreal scene print",
+    "attenuated figures surreal lithograph",
+    "pyramidal tents modern print",
+    "European surrealist lithograph"
+  ],
+  "limitPerQuery": 100,
+  "concurrency": 3
+}
+```
+
+Error response when `terms` missing/empty:
+```json
+{
+  "success": false,
+  "error": "terms_required",
+  "message": "Provide non-empty terms[]; term generation is disabled in this deployment."
 }
 ```
 

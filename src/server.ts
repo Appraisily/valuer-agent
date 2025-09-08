@@ -304,6 +304,16 @@ const MultiSearchSchema = z.object({
 app.post('/api/multi-search', asyncHandler(async (req, res) => {
   const { description, primaryImageUrl, additionalImageUrls = [], minPrice, maxPrice, concurrency = Number(process.env.VALUER_BATCH_CONCURRENCY || 5), limitPerQuery = 100, sort = 'relevance', timeoutMs, retries, maxQueries, terms, skipSummary = false, maxItems, targetValue, justify, category, maker, brand, model, subject, styleEra, mediumMaterial, region } = MultiSearchSchema.parse(req.body);
 
+  // Enforce upstream ownership of term generation: require non-empty terms[]
+  const providedTerms = Array.isArray(terms) ? Array.from(new Set(terms.map(t => String(t).trim()).filter(Boolean))) : [];
+  if (providedTerms.length === 0) {
+    return res.status(400).json({
+      success: false,
+      error: 'terms_required',
+      message: 'Provide non-empty terms[]; term generation is disabled in this deployment.'
+    });
+  }
+
   // Derive min/max around target when in justification mode
   const justifyMode = Boolean(justify || (typeof targetValue === 'number' && isFinite(targetValue)));
   // Use asymmetric band around appraiser value (default: 50%–200%)
@@ -401,17 +411,11 @@ app.post('/api/multi-search', asyncHandler(async (req, res) => {
   // Build tiered queries. Prefer caller-provided terms when present to keep WS as the owner of term generation.
   let tiers: Array<{ name: string; terms: string[] }>;
   if (Array.isArray(terms) && terms.length > 0) {
-    // Distribute provided terms across specific → moderate → broad to spread the budget.
+    // Do NOT split provided terms into internal tiers. Treat the provided list as a single batch
+    // to avoid double-tiering when upstream (web-services) already grouped queries by specificity.
+    // This reduces internal sharding (previously ~2 per tier for 6-term inputs) to a single batch.
     const src = Array.from(new Set(terms.map(t => String(t).trim()).filter(Boolean)));
-    const perBucket = Math.max(1, Math.ceil(src.length / 3));
-    const specificTerms = src.slice(0, perBucket);
-    const moderateTerms = src.slice(perBucket, perBucket * 2);
-    const broadTerms = src.slice(perBucket * 2);
-    tiers = [
-      { name: 'specific', terms: specificTerms },
-      { name: 'moderate', terms: moderateTerms },
-      { name: 'broad', terms: broadTerms },
-    ];
+    tiers = [ { name: 'provided', terms: src } ];
   } else {
     const pyramidRun = buildQueryPyramid({ description, category, maker, brand, model, subject, styleEra, mediumMaterial, region });
     tiers = [
