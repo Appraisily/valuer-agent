@@ -441,6 +441,11 @@ app.post('/api/multi-search', asyncHandler(async (req, res) => {
     const tierTerms = clean.slice(0, takeCount);
     if (tierTerms.length === 0) continue;
 
+    // Log the exact queries this tier will execute
+    try {
+      console.log(`Executing tier "${tier.name}" queries: ${tierTerms.join(' | ')}`);
+    } catch (_) {}
+
     const searchesTier = tierTerms.map(q => {
       const priceResult: any = { min: String(effMinPrice) };
       if (typeof effMaxPrice === 'number') priceResult.max = String(effMaxPrice);
