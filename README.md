@@ -143,7 +143,7 @@ Performs concurrent term searches. When called with `justify:true` and a `target
 Notes (current deployment behavior):
 - `terms` is required. This service does not generate search terms when `terms` is missing/empty. Upstream callers (e.g., web‑services) own term generation and grouping.
 - `description` may be an empty string when `terms` are provided — this is expected.
-- Concurrency is honored per batch (typically 3), and an early‑stop of 100 unique lots is applied (`VALUER_EARLY_STOP_AT`, default 100).
+- Concurrency is honored per batch (typically 3). There is no hard early‑stop by default; you can cap total unique lots with the request field `maxItems` or the env `VALUER_EARLY_STOP_AT` (> 0). If neither is set, the service will collect up to the natural maximum (e.g., queries × per‑query limit).
 
 Example request (preferred):
 ```json

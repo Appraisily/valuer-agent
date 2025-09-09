@@ -399,7 +399,16 @@ app.post('/api/multi-search', asyncHandler(async (req, res) => {
     }
     return limitPerQuery;
   })();
-  const EARLY_STOP_AT = Number(process.env.VALUER_EARLY_STOP_AT || 100);
+  // Determine an effective cap for total unique lots, if any.
+  // Priority:
+  // 1) Request `maxItems`
+  // 2) Env `VALUER_EARLY_STOP_AT` (>0)
+  // 3) Otherwise, no cap (Infinity) – allows up to queries*tierLimit (e.g., 6*96)
+  const _envEarlyStop = Number(process.env.VALUER_EARLY_STOP_AT);
+  const HAS_ENV_CAP = Number.isFinite(_envEarlyStop) && _envEarlyStop > 0;
+  const MAX_ITEMS_TOTAL = (typeof maxItems === 'number' && maxItems > 0)
+    ? Math.ceil(maxItems)
+    : (HAS_ENV_CAP ? Math.ceil(_envEarlyStop) : Infinity);
   const tBatch0 = Date.now();
   // Aggregate compact items for summarization and UI
   type CompactItem = { title?: string; price?: { amount?: number; currency?: string }; auctionHouse?: string; date?: string; url?: string };
@@ -473,6 +482,7 @@ app.post('/api/multi-search', asyncHandler(async (req, res) => {
     remainingBudget = isFinite(remainingBudget) ? Math.max(0, remainingBudget - tierTerms.length) : remainingBudget;
 
     const preCount = aggregated.length;
+    let addedThisTier = 0;
     for (const s of batchTier.searches || []) {
       const lots = s?.result?.data?.lots || [];
       const meta = { query: s?.query || '', lotsCount: Array.isArray(lots) ? lots.length : 0, error: s?.error || undefined };
@@ -489,15 +499,16 @@ app.post('/api/multi-search', asyncHandler(async (req, res) => {
           date: lot?.date || lot?.dateTimeLocal,
           url: lot?.url || lot?.lotUrl || lot?.permalink
         });
-        if (aggregated.length >= EARLY_STOP_AT) break;
+        addedThisTier++;
+        if (aggregated.length >= MAX_ITEMS_TOTAL) break;
       }
-      if (aggregated.length >= EARLY_STOP_AT) break;
+      if (aggregated.length >= MAX_ITEMS_TOTAL) break;
       byQuery.push({ ...s, meta });
     }
     const added = aggregated.length - preCount;
     console.log(`Tier="${tier.name}" contributed ${added} unique lots (total=${aggregated.length})`);
-    if (aggregated.length >= EARLY_STOP_AT) {
-      console.log(`Early stop reached at ${EARLY_STOP_AT} unique lots. Halting further tiers.`);
+    if (Number.isFinite(MAX_ITEMS_TOTAL) && aggregated.length >= MAX_ITEMS_TOTAL) {
+      console.log(`Cap reached at ${MAX_ITEMS_TOTAL} unique lots. Halting further tiers.`);
       break;
     }
   }
@@ -539,9 +550,9 @@ app.post('/api/multi-search', asyncHandler(async (req, res) => {
             date: lot?.date || lot?.dateTimeLocal,
             url: lot?.url || lot?.lotUrl || lot?.permalink
           });
-          if (aggregated.length >= 100) break;
+          if (aggregated.length >= MAX_ITEMS_TOTAL) break;
         }
-        if (aggregated.length >= 100) break;
+        if (aggregated.length >= MAX_ITEMS_TOTAL) break;
         byQuery.push({ ...s, meta });
       }
     } catch (e) {
