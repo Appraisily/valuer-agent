@@ -171,6 +171,70 @@ Error response when `terms` missing/empty:
 }
 ```
 
+### POST /v2/search/batch (preferred)
+Structured, versioned contract for multi-term search. Caller provides tiered terms and pricing; the service executes batches respecting caller ordering and returns the accepted plan and per-query results.
+
+Request headers:
+- `X-Correlation-Id`: optional correlation identifier echoed back
+- `Idempotency-Key`: optional key to deduplicate retries
+
+Request body schema (TypeScript/Zod equivalent):
+```jsonc
+{
+  "schemaVersion": "2.0", // optional, defaults "2.0"
+  "context": {
+    "sessionId": "string?",
+    "appraisalId": "string?",
+    "target": "professional" | "screener",
+    "rev": "string?" // arbitrary caller revision tag
+  },
+  "pricing": {
+    "min": 100,          // WS-owned effective min price
+    "max": 2000,         // optional WS-owned effective max price
+    "justify": true      // whether banding is intended
+  },
+  "limits": {
+    "perTerm": 100,      // per-query lot limit
+    "total": 21,         // optional total query cap across tiers
+    "timeoutMs": 150000, // optional batch timeout
+    "retries": 3         // optional retry attempts
+  },
+  "options": {
+    "tierSplit": "provided", // must be "provided"; service won’t re-tier
+    "concurrency": 3,
+    "sort": "relevance"
+  },
+  "terms": {
+    "very_specific": ["Laszlo De Nagy oil painting", "Truro Lighthouse oil on board"],
+    "specific": ["oil on board lighthouse", "coastal dunes oil painting"],
+    "moderate": ["oil landscape"],
+    "flattened": [/* very_specific + specific + moderate ordered */]
+  }
+}
+```
+
+Response:
+```json
+{
+  "success": true,
+  "correlationId": "...",
+  "acceptedPlan": { "very_specific": 9, "specific": 9, "moderate": 3, "total": 21 },
+  "used": {
+    "queries": [ { "term": "...", "tier": "very specific" }, { "term": "...", "tier": "specific" } ],
+    "pricing": { "min": 325, "max": 1300, "justify": true }
+  },
+  "data": { "byQuery": [ /* per-query results with lots */ ] },
+  "batch": { "total": 9, "completed": 9, "failed": 0 },
+  "summary": { "totalItems": 468, "uniqueLots": 448, "durationMs": 20817 },
+  "meta": { "schemaVersion": "2.0", "context": { /* echoed */ } }
+}
+```
+
+Notes:
+- The service does not alter tier assignment when `terms` are provided. Ordering is preserved.
+- Pricing min/max is taken as-is from the request; no implicit banding is applied server-side.
+- Concurrency is per-tier best-effort.
+
 ### POST /api/find-value
 Determines a value for an item based on its description.
 
