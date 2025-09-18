@@ -420,11 +420,30 @@ app.post('/api/multi-search', asyncHandler(async (req, res) => {
   // Build tiered queries. Prefer caller-provided terms when present to keep WS as the owner of term generation.
   let tiers: Array<{ name: string; terms: string[] }>;
   if (Array.isArray(terms) && terms.length > 0) {
-    // Do NOT split provided terms into internal tiers. Treat the provided list as a single batch
-    // to avoid double-tiering when upstream (web-services) already grouped queries by specificity.
-    // This reduces internal sharding (previously ~2 per tier for 6-term inputs) to a single batch.
     const src = Array.from(new Set(terms.map(t => String(t).trim()).filter(Boolean)));
-    tiers = [ { name: 'provided', terms: src } ];
+    // Optionally split provided terms into pseudo-tiers (9-9-3) so logs show per-tier execution.
+    // Enabled by default when enough terms are provided; can be disabled via env.
+    const splitEnv = String(process.env.PROVIDED_TIER_SPLIT || 'true').toLowerCase();
+    const splitEnabled = (splitEnv === '1' || splitEnv === 'true' || splitEnv === 'yes');
+    if (splitEnabled && src.length >= 3) {
+      const verySpecific = src.slice(0, 9);
+      const specific = src.slice(9, 18);
+      const broad = src.slice(18, 21);
+      tiers = [];
+      if (verySpecific.length) tiers.push({ name: 'very specific', terms: verySpecific });
+      if (specific.length) tiers.push({ name: 'specific', terms: specific });
+      if (broad.length) tiers.push({ name: 'broad', terms: broad });
+      try {
+        console.log('Tier plan (provided terms):', {
+          verySpecific: verySpecific.length,
+          specific: specific.length,
+          broad: broad.length,
+          total: src.length
+        });
+      } catch (_) {}
+    } else {
+      tiers = [ { name: 'provided', terms: src } ];
+    }
   } else {
     const pyramidRun = buildQueryPyramid({ description, category, maker, brand, model, subject, styleEra, mediumMaterial, region });
     tiers = [
