@@ -171,6 +171,7 @@ app.use('/api/justify', checkServicesInitialized);
 app.use('/api/find-value', checkServicesInitialized);
 app.use('/api/find-value-range', checkServicesInitialized);
 app.use('/api/multi-search', checkServicesInitialized);
+app.use('/v2/search/batch', checkServicesInitialized);
 // Note: /api/auction-results and /api/wp2hugo-auction-results only need 'valuer', which is initialized synchronously.
 // Note: /api/enhanced-statistics needs 'statistics' service.
 app.use('/api/enhanced-statistics', checkServicesInitialized);
@@ -668,6 +669,176 @@ app.post('/api/multi-search', asyncHandler(async (req, res) => {
     },
     stats: { ...cumulativeStats, uniqueLots: uniqueTitles.size, totalLots, durationMs },
     summary: summary || undefined
+  });
+}));
+
+// v2: Structured batch search with explicit tiers and stable contract
+const V2BatchSchema = z.object({
+  schemaVersion: z.string().optional(),
+  context: z.object({
+    sessionId: z.string().optional(),
+    appraisalId: z.string().optional(),
+    target: z.enum(['professional', 'screener']).optional(),
+    rev: z.string().optional(),
+  }).optional(),
+  pricing: z.object({
+    min: z.number().nullable().optional(),
+    max: z.number().nullable().optional(),
+    justify: z.boolean().optional(),
+  }).optional(),
+  limits: z.object({
+    perTerm: z.number().optional(),
+    total: z.number().optional(),
+    timeoutMs: z.number().optional(),
+    retries: z.number().optional(),
+  }).optional(),
+  options: z.object({
+    tierSplit: z.enum(['provided', 'ignore']).optional(),
+    concurrency: z.number().optional(),
+    sort: z.string().optional(),
+  }).optional(),
+  terms: z.object({
+    very_specific: z.array(z.string()).optional(),
+    specific: z.array(z.string()).optional(),
+    moderate: z.array(z.string()).optional(),
+    flattened: z.array(z.string()).optional(),
+  })
+});
+
+app.post('/v2/search/batch', asyncHandler(async (req, res) => {
+  const corrId = req.header('X-Correlation-Id') || undefined;
+  const parsed = V2BatchSchema.parse(req.body);
+  const schemaVersion = parsed.schemaVersion || '2.0';
+  const ctx = parsed.context || {};
+  const pricing = parsed.pricing || {};
+  const limits = parsed.limits || {};
+  const options = parsed.options || {};
+  const terms = parsed.terms || {} as any;
+
+  const concurrency = typeof options.concurrency === 'number' && options.concurrency > 0
+    ? options.concurrency
+    : Number(process.env.VALUER_BATCH_CONCURRENCY || 5);
+  const limitPerQuery = typeof limits.perTerm === 'number' && limits.perTerm > 0 ? limits.perTerm : 100;
+  const sort = options.sort || 'relevance';
+  const timeoutMs = limits.timeoutMs;
+  const retries = limits.retries;
+
+  // Build tiers from provided terms (respect caller ordering)
+  const vs = Array.isArray(terms.very_specific) ? Array.from(new Set(terms.very_specific.map(String).map(s=>s.trim()).filter(Boolean))) : [];
+  const sp = Array.isArray(terms.specific) ? Array.from(new Set(terms.specific.map(String).map(s=>s.trim()).filter(Boolean))) : [];
+  const md = Array.isArray(terms.moderate) ? Array.from(new Set(terms.moderate.map(String).map(s=>s.trim()).filter(Boolean))) : [];
+  const flattened = Array.isArray(terms.flattened) ? terms.flattened : [...vs, ...sp, ...md];
+  if (flattened.length === 0) {
+    return res.status(400).json({ success: false, error: 'terms_required', message: 'Provide non-empty terms. (v2)' });
+  }
+
+  const acceptedPlan = {
+    very_specific: vs.length,
+    specific: sp.length,
+    moderate: md.length,
+    total: flattened.length,
+  };
+
+  try {
+    console.log('Tier plan (provided v2):', acceptedPlan);
+  } catch (_) {}
+
+  // Pricing band: v2 expects WS to compute min/max; do not derive from target here.
+  const effMinPrice = (typeof pricing.min === 'number' && isFinite(pricing.min as number))
+    ? (pricing.min as number)
+    : Number(process.env.VALUER_MIN_PRICE_DEFAULT || 250);
+  const effMaxPrice = (typeof pricing.max === 'number' && isFinite(pricing.max as number)) ? (pricing.max as number) : undefined;
+  const justify = Boolean(pricing.justify);
+
+  // Apply total cap across tiers
+  let remaining = (typeof limits.total === 'number' && isFinite(limits.total)) ? Math.max(0, Math.floor(limits.total)) : Infinity;
+  type Tier = { name: string; terms: string[] };
+  const tiers: Tier[] = [];
+  if (vs.length) tiers.push({ name: 'very specific', terms: vs });
+  if (sp.length) tiers.push({ name: 'specific', terms: sp });
+  if (md.length) tiers.push({ name: 'moderate', terms: md });
+  if (tiers.length === 0) {
+    // Fallback to single-tier execution over flattened
+    tiers.push({ name: 'provided', terms: flattened });
+  }
+
+  const uniqueTitles = new Set<string>();
+  let aggregated: Array<{ title?: string; price?: { amount?: number; currency?: string }; auctionHouse?: string; date?: string; url?: string }> = [];
+  const byQuery: any[] = [];
+  const allExecuted: Array<{ term: string; tier: string }> = [];
+  let batchTotals = { total: 0, completed: 0, failed: 0 };
+  const tStart = Date.now();
+
+  for (let i = 0; i < tiers.length; i++) {
+    const tier = tiers[i];
+    if (remaining <= 0) break;
+    const clean = tier.terms.filter(Boolean);
+    const tiersLeft = (tiers.length - i);
+    const spread = Math.ceil((isFinite(remaining) ? remaining : clean.length) / Math.max(1, tiersLeft));
+    const desiredForTier = Math.max(concurrency, spread);
+    const takeCount = Math.min(isFinite(remaining) ? remaining : clean.length, Math.min(desiredForTier, clean.length));
+    const tierTerms = clean.slice(0, takeCount);
+    if (tierTerms.length === 0) continue;
+
+    try { console.log(`Executing tier "${tier.name}" queries: ${tierTerms.join(' | ')}`); } catch (_) {}
+
+    const searchesTier = tierTerms.map(q => {
+      const priceResult: any = { min: String(effMinPrice) };
+      if (typeof effMaxPrice === 'number') priceResult.max = String(effMaxPrice);
+      allExecuted.push({ term: q, tier: tier.name });
+      return ({ query: q, priceResult, limit: limitPerQuery, sort });
+    });
+
+    const t0 = Date.now();
+    const batchTier = await valuer.batchSearch({
+      searches: searchesTier,
+      concurrency: Math.min(concurrency, searchesTier.length),
+      fetchAllPages: false
+    }, {
+      timeoutMs: typeof timeoutMs === 'number' ? timeoutMs : Number(process.env.VALUER_BATCH_HTTP_TIMEOUT_MS || 0) || undefined,
+      retry: typeof retries === 'number' ? { attempts: retries } : undefined,
+    });
+    const tierDuration = Date.now() - t0;
+    console.log(`Batch search completed: total=${batchTier?.batch?.total || searchesTier.length}, completed=${batchTier?.batch?.completed || 0}, failed=${batchTier?.batch?.failed || 0}, concurrency=${Math.min(concurrency, searchesTier.length)}, durationMs=${tierDuration}`);
+    batchTotals.total += batchTier?.batch?.total || searchesTier.length;
+    batchTotals.completed += batchTier?.batch?.completed || 0;
+    batchTotals.failed += batchTier?.batch?.failed || 0;
+
+    remaining = isFinite(remaining) ? Math.max(0, remaining - tierTerms.length) : remaining;
+
+    for (const s of batchTier.searches || []) {
+      const lots = s?.result?.data?.lots || [];
+      const meta = { query: s?.query || '', lotsCount: Array.isArray(lots) ? lots.length : 0 };
+      byQuery.push({ ...s, meta });
+      for (const lot of lots) {
+        const title: string | undefined = lot?.title || lot?.lotTitle;
+        if (!title || uniqueTitles.has(title)) continue;
+        uniqueTitles.add(title);
+        const priceAmount = (lot?.price && typeof lot.price.amount === 'number') ? lot.price.amount : (typeof lot?.priceResult === 'number' ? lot.priceResult : undefined);
+        const currency = lot?.price?.currency || lot?.currency || lot?.currencyCode || 'USD';
+        aggregated.push({
+          title,
+          price: priceAmount ? { amount: priceAmount, currency } : undefined,
+          auctionHouse: lot?.auctionHouse || lot?.house || lot?.houseName,
+          date: lot?.date || lot?.dateTimeLocal,
+          url: lot?.url || lot?.lotUrl
+        });
+      }
+    }
+  }
+
+  const durationMs = Date.now() - tStart;
+  const summary = { totalItems: aggregated.length, uniqueLots: uniqueTitles.size, durationMs };
+
+  return res.json({
+    success: true,
+    correlationId: corrId || null,
+    acceptedPlan,
+    used: { queries: allExecuted, pricing: { min: effMinPrice, max: effMaxPrice || null, justify } },
+    data: { byQuery },
+    batch: batchTotals,
+    summary,
+    meta: { schemaVersion, context: ctx }
   });
 }));
 
