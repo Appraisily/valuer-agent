@@ -850,11 +850,12 @@ app.post('/v2/search/batch', asyncHandler(async (req, res) => {
   }
 
   // Apply total cap across tiers
-  const totalLimit = (typeof limits.total === 'number' && Number.isFinite(limits.total)) ? limits.total : undefined;
-  let remaining = Infinity;
-  if (typeof totalLimit === 'number') {
-    remaining = Math.max(0, Math.floor(totalLimit));
-  }
+  const normalizeTotalLimit = (value: number | undefined): number | undefined => {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
+    return Math.max(0, Math.floor(value));
+  };
+  const normalizedTotalLimit = normalizeTotalLimit(limits.total);
+  let remaining = normalizedTotalLimit ?? Infinity;
   type Tier = { name: string; terms: string[] };
   const tiers: Tier[] = [];
   if (vs.length) tiers.push({ name: 'very specific', terms: vs });
