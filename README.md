@@ -60,7 +60,6 @@ Secrets are managed through Google Cloud Secret Manager. The primary secret requ
 │   ├── server.ts        # Main Express server setup
 │   ├── services/        # Core service modules
 │   │   ├── justifier-agent.ts      # Valuation justification agent
-│   │   ├── justifier.ts            # Justification logic
 │   │   ├── keyword-extraction.service.ts # Keyword extraction for searches
 │   │   ├── market-data-aggregator.service.ts # Aggregates market data
 │   │   ├── market-data.ts          # Market data fetching service
@@ -72,7 +71,6 @@ Secrets are managed through Google Cloud Secret Manager. The primary secret requ
 │   │   ├── prompts/               # AI prompts
 │   │   └── utils/                 # Utility functions
 │   ├── tests/           # Test files
-│   └── App.tsx          # Frontend app component (not used in backend)
 ├── Dockerfile           # Docker configuration
 ├── tsconfig.json        # TypeScript configuration
 └── package.json         # Project dependencies and scripts
@@ -191,6 +189,7 @@ Request body schema (TypeScript/Zod equivalent):
   "pricing": {
     "min": 100,          // WS-owned effective min price
     "max": 2000,         // optional WS-owned effective max price
+    "reference": 800,    // optional appraiser reference value (echoed; used in summaries)
     "justify": true      // whether banding is intended
   },
   "limits": {
@@ -221,7 +220,7 @@ Response:
   "acceptedPlan": { "very_specific": 9, "specific": 9, "moderate": 3, "total": 21 },
   "used": {
     "queries": [ { "term": "...", "tier": "very specific" }, { "term": "...", "tier": "specific" } ],
-    "pricing": { "min": 325, "max": 1300, "justify": true }
+    "pricing": { "min": 325, "max": 1300, "reference": 800, "justify": true }
   },
   "data": { "byQuery": [ /* per-query results with lots */ ] },
   "batch": { "total": 9, "completed": 9, "failed": 0 },
@@ -233,7 +232,8 @@ Response:
 Notes:
 - The service does not alter tier assignment when `terms` are provided. Ordering is preserved.
 - Pricing min/max is taken as-is from the request; no implicit banding is applied server-side.
-- Concurrency is per-tier best-effort.
+- Exactly one underlying Valuer `/api/search/batch` call is executed per request across all tiers (no per-tier batching).
+- Concurrency applies across the combined set of queries (best-effort, capped by `concurrency`).
 
 ### POST /api/find-value
 Determines a value for an item based on its description.

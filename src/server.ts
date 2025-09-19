@@ -685,6 +685,7 @@ const V2BatchSchema = z.object({
     min: z.number().nullable().optional(),
     max: z.number().nullable().optional(),
     justify: z.boolean().optional(),
+    reference: z.number().nullable().optional(),
   }).optional(),
   limits: z.object({
     perTerm: z.number().optional(),
@@ -723,6 +724,19 @@ app.post('/v2/search/batch', asyncHandler(async (req, res) => {
   const timeoutMs = limits.timeoutMs;
   const retries = limits.retries;
 
+  const envTimeout = Number(process.env.VALUER_BATCH_HTTP_TIMEOUT_MS);
+  const resolvedTimeoutMs = typeof timeoutMs === 'number' && Number.isFinite(timeoutMs) && timeoutMs > 0
+    ? timeoutMs
+    : (Number.isFinite(envTimeout) && envTimeout > 0 ? envTimeout : undefined);
+
+  const batchOptions: { timeoutMs?: number; retry?: { attempts: number } } = {};
+  if (resolvedTimeoutMs !== undefined) {
+    batchOptions.timeoutMs = resolvedTimeoutMs;
+  }
+  if (typeof retries === 'number' && Number.isFinite(retries) && retries > 0) {
+    batchOptions.retry = { attempts: retries };
+  }
+
   // Build tiers from provided terms (respect caller ordering)
   const vs = Array.isArray(terms.very_specific) ? Array.from(new Set(terms.very_specific.map(String).map(s=>s.trim()).filter(Boolean))) : [];
   const sp = Array.isArray(terms.specific) ? Array.from(new Set(terms.specific.map(String).map(s=>s.trim()).filter(Boolean))) : [];
@@ -750,8 +764,97 @@ app.post('/v2/search/batch', asyncHandler(async (req, res) => {
   const effMaxPrice = (typeof pricing.max === 'number' && isFinite(pricing.max as number)) ? (pricing.max as number) : undefined;
   const justify = Boolean(pricing.justify);
 
+  // Execute as a single combined batch across all tiers (respect provided plan)
+  {
+    type TermWithTier = { term: string; tier: string };
+    const combined: TermWithTier[] = [];
+    const vs = Array.isArray(terms.very_specific) ? Array.from(new Set(terms.very_specific.map(String).map(s=>s.trim()).filter(Boolean))) : [];
+    const sp = Array.isArray(terms.specific) ? Array.from(new Set(terms.specific.map(String).map(s=>s.trim()).filter(Boolean))) : [];
+    const md = Array.isArray(terms.moderate) ? Array.from(new Set(terms.moderate.map(String).map(s=>s.trim()).filter(Boolean))) : [];
+    const flattened = Array.isArray(terms.flattened) ? terms.flattened : [...vs, ...sp, ...md];
+    vs.forEach(t => combined.push({ term: t, tier: 'very specific' }));
+    sp.forEach(t => combined.push({ term: t, tier: 'specific' }));
+    md.forEach(t => combined.push({ term: t, tier: 'moderate' }));
+    if (combined.length === 0) {
+      flattened.forEach(t => combined.push({ term: t, tier: 'provided' }));
+    }
+
+    if (typeof limits.total === 'number' && isFinite(limits.total) && limits.total !== combined.length) {
+      try { console.log(`Note: limits.total=${limits.total} != providedTerms=${combined.length}. Proceeding with provided terms to honor plan.`); } catch (_) {}
+    }
+
+    const uniqueTitles2 = new Set<string>();
+    let aggregated2: Array<{ title?: string; price?: { amount?: number; currency?: string }; auctionHouse?: string; date?: string; url?: string }> = [];
+    const byQuery2: any[] = [];
+    const allExecuted2: Array<{ term: string; tier: string }> = [];
+    const tStart2 = Date.now();
+
+    const searches = combined.map(({ term, tier }) => {
+      const priceResult: any = { min: String(effMinPrice) };
+      if (typeof effMaxPrice === 'number') priceResult.max = String(effMaxPrice);
+      allExecuted2.push({ term, tier });
+      return ({ query: term, priceResult, limit: limitPerQuery, sort });
+    });
+
+    const t0 = Date.now();
+    const batch = await valuer.batchSearch({
+      searches,
+      concurrency: Math.min(concurrency, searches.length),
+      fetchAllPages: false
+    }, batchOptions);
+    const batchDuration = Date.now() - t0;
+    console.log(`Batch search completed: total=${batch?.batch?.total || searches.length}, completed=${batch?.batch?.completed || 0}, failed=${batch?.batch?.failed || 0}, concurrency=${Math.min(concurrency, searches.length)}, durationMs=${batchDuration}`);
+
+    for (let i = 0; i < (batch.searches || []).length; i++) {
+      const s = (batch.searches || [])[i];
+      const lots = s?.result?.data?.lots || [];
+      const meta = { query: s?.query || combined[i]?.term || '', lotsCount: Array.isArray(lots) ? lots.length : 0, tier: combined[i]?.tier };
+      byQuery2.push({ ...s, meta });
+      for (const lot of lots) {
+        const rawTitle = lot?.title || lot?.lotTitle;
+        if (typeof rawTitle !== 'string' || rawTitle.length === 0) continue;
+        const title = rawTitle;
+        if (uniqueTitles2.has(title)) continue;
+        uniqueTitles2.add(title);
+        const priceAmount = (lot?.price && typeof lot.price.amount === 'number') ? lot.price.amount : (typeof lot?.priceResult === 'number' ? lot.priceResult : undefined);
+        const currency = lot?.price?.currency || lot?.currency || lot?.currencyCode || 'USD';
+        aggregated2.push({
+          title,
+          price: priceAmount ? { amount: priceAmount, currency } : undefined,
+          auctionHouse: lot?.auctionHouse || lot?.house || lot?.houseName,
+          date: lot?.date || lot?.dateTimeLocal,
+          url: lot?.url || lot?.lotUrl
+        });
+      }
+    }
+
+    const durationMs2 = Date.now() - tStart2;
+    const summary2 = { totalItems: aggregated2.length, uniqueLots: uniqueTitles2.size, durationMs: durationMs2 };
+    const acceptedPlan = {
+      very_specific: vs.length,
+      specific: sp.length,
+      moderate: md.length,
+      total: (Array.isArray(terms.flattened) ? terms.flattened.length : (vs.length + sp.length + md.length)),
+    };
+
+    return res.json({
+      success: true,
+      correlationId: corrId || null,
+      acceptedPlan,
+      used: { queries: allExecuted2, pricing: { min: effMinPrice, max: effMaxPrice || null, reference: (pricing as any).reference ?? null, justify } },
+      data: { byQuery: byQuery2 },
+      batch: batch?.batch || { total: searches.length, completed: (batch?.searches || []).length, failed: 0 },
+      summary: summary2,
+      meta: { schemaVersion, context: ctx }
+    });
+  }
+
   // Apply total cap across tiers
-  let remaining = (typeof limits.total === 'number' && isFinite(limits.total)) ? Math.max(0, Math.floor(limits.total)) : Infinity;
+  const totalLimit = (typeof limits.total === 'number' && Number.isFinite(limits.total)) ? limits.total : undefined;
+  let remaining = Infinity;
+  if (typeof totalLimit === 'number') {
+    remaining = Math.max(0, Math.floor(totalLimit));
+  }
   type Tier = { name: string; terms: string[] };
   const tiers: Tier[] = [];
   if (vs.length) tiers.push({ name: 'very specific', terms: vs });
@@ -794,10 +897,7 @@ app.post('/v2/search/batch', asyncHandler(async (req, res) => {
       searches: searchesTier,
       concurrency: Math.min(concurrency, searchesTier.length),
       fetchAllPages: false
-    }, {
-      timeoutMs: typeof timeoutMs === 'number' ? timeoutMs : Number(process.env.VALUER_BATCH_HTTP_TIMEOUT_MS || 0) || undefined,
-      retry: typeof retries === 'number' ? { attempts: retries } : undefined,
-    });
+    }, batchOptions);
     const tierDuration = Date.now() - t0;
     console.log(`Batch search completed: total=${batchTier?.batch?.total || searchesTier.length}, completed=${batchTier?.batch?.completed || 0}, failed=${batchTier?.batch?.failed || 0}, concurrency=${Math.min(concurrency, searchesTier.length)}, durationMs=${tierDuration}`);
     batchTotals.total += batchTier?.batch?.total || searchesTier.length;
@@ -811,8 +911,10 @@ app.post('/v2/search/batch', asyncHandler(async (req, res) => {
       const meta = { query: s?.query || '', lotsCount: Array.isArray(lots) ? lots.length : 0 };
       byQuery.push({ ...s, meta });
       for (const lot of lots) {
-        const title: string | undefined = lot?.title || lot?.lotTitle;
-        if (!title || uniqueTitles.has(title)) continue;
+        const rawTitle = lot?.title || lot?.lotTitle;
+        if (typeof rawTitle !== 'string' || rawTitle.length === 0) continue;
+        const title = rawTitle;
+        if (uniqueTitles.has(title)) continue;
         uniqueTitles.add(title);
         const priceAmount = (lot?.price && typeof lot.price.amount === 'number') ? lot.price.amount : (typeof lot?.priceResult === 'number' ? lot.priceResult : undefined);
         const currency = lot?.price?.currency || lot?.currency || lot?.currencyCode || 'USD';
