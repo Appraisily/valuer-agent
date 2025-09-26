@@ -41,6 +41,30 @@ async function getOpenAIKey() {
 const app = express();
 app.use(express.json());
 
+// Structured HTTP request logs (start/end with durationMs)
+app.use((req: Request, res: Response, next: NextFunction) => {
+  try {
+    const start = Date.now();
+    const inbound = req.header('X-Correlation-Id') || req.header('X-Request-Id');
+    const requestId = inbound || (globalThis.crypto?.randomUUID?.() || Math.random().toString(36).slice(2));
+    try { res.setHeader('x-request-id', requestId); } catch {}
+    const meta: Record<string, unknown> = {
+      requestId,
+      correlationId: requestId,
+      method: req.method,
+      url: req.originalUrl,
+      ip: (req as any).ip,
+      userAgent: req.get('user-agent') || '',
+    };
+    // Log as JSON so Cloud Logging can parse structure
+    console.log(JSON.stringify({ ts: new Date().toISOString(), level: 'info', context: 'HTTP', msg: 'request:start', ...meta }));
+    res.on('finish', () => {
+      console.log(JSON.stringify({ ts: new Date().toISOString(), level: 'info', context: 'HTTP', msg: 'request:end', ...meta, status: res.statusCode, durationMs: Date.now() - start }));
+    });
+  } catch {}
+  next();
+});
+
 let openai: OpenAI;
 let justifier: JustifierAgent;
 let statistics: StatisticsService;
