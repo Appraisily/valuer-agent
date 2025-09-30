@@ -1,0 +1,1 @@
+$(cat /tmp/valuer-agent.us-central1.env.json)
