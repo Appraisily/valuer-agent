@@ -1,7 +1,6 @@
 import express, { Request, Response, NextFunction } from 'express';
 import { z, ZodError } from 'zod';
 import OpenAI from 'openai';
-import { SecretManagerServiceClient } from '@google-cloud/secret-manager';
 import { ValuerService } from './services/valuer.js';
 import { buildQueryPyramid, flattenPyramid } from './services/query-pyramid.js';
 import { callOpenAIAndParseJson } from './services/utils/openai-helper.js';
@@ -10,32 +9,10 @@ import { JustifierAgent } from './services/justifier-agent.js';
 import { StatisticsService } from './services/statistics-service.js';
 
 async function getOpenAIKey() {
-  // For local development, check if direct API key is provided
-  if (process.env.OPENAI_API_KEY) {
-    console.log('Using OPENAI_API_KEY from environment variables');
-    return process.env.OPENAI_API_KEY;
-  }
-
-  // For Cloud Run, use Secret Manager. Auto-detect project ID when not provided.
-  try {
-    const client = new SecretManagerServiceClient();
-    const detectedProjectId = await client.getProjectId();
-    const projectId = (
-      process.env.GOOGLE_CLOUD_PROJECT ||
-      process.env.GCP_PROJECT ||
-      process.env.PROJECT_ID ||
-      process.env.GOOGLE_CLOUD_PROJECT_ID ||
-      detectedProjectId
-    );
-
-    const name = `projects/${projectId}/secrets/OPENAI_API_KEY/versions/latest`;
-
-    const [version] = await client.accessSecretVersion({ name });
-    return version.payload?.data?.toString() || '';
-  } catch (error) {
-    console.error('Error fetching OpenAI API key from Secret Manager:', error);
-    throw error;
-  }
+  const key = (process.env.OPENAI_API_KEY || '').trim();
+  if (!key) throw new Error('OPENAI_API_KEY is required');
+  console.log('Using OPENAI_API_KEY from environment variables');
+  return key;
 }
 
 const app = express();
