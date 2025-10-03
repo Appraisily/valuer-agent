@@ -10,5 +10,9 @@
   {
     "name": "INVALUABLE_CF_CLEARANCE",
     "source": "env"
+  },
+  {
+    "name": "OPENAI_API_KEY",
+    "source": "secret"
   }
 ]
