@@ -11,7 +11,8 @@ The Valuer Agent Backend provides API endpoints for item valuation, price justif
 - **Node.js/Express**: Backend framework
 - **TypeScript**: Type-safe JavaScript
 - **OpenAI API**: For AI-powered valuation and analysis
-- **Google Cloud Secret Manager**: For secure API key management
+- **RabbitMQ**: Internal messaging and audit event fan-out
+- **Local filesystem storage**: Archives request/response payloads for debugging
 - **Docker**: For containerization and deployment
 
 ## Installation and Setup
@@ -33,23 +34,20 @@ npm run build
 npm start
 ```
 
-## Environment Requirements
+## Environment Governance
 
-The application requires the following environment variables:
+- Run `npm run env:check` (delegates to `repos/env-governance/schemas/services/valuer-agent.json`) before `npm run dev`, `npm run build`, or deployment.
+- Required:
+  - `OPENAI_API_KEY` – the service refuses to start without an AI key.
+- Optional but commonly configured:
+  - **Valuer backend** – `VALUER_BASE_URL`, `VALUER_ID_TOKEN`, `VALUER_AUTH_DISABLED`.
+  - **Messaging** – `MESSAGE_TRANSPORT`/`MESSAGE_BROKER_URL`/`MESSAGE_EXCHANGE`/`MESSAGE_ROUTING_KEY` (set `MESSAGE_TRANSPORT=none` to disable fan-out).
+  - **Archiving** – `VALUER_ARCHIVE_RESPONSES`, `VALUER_ARCHIVE_PREFIX`, local storage knobs (`LOCAL_STORAGE_ROOT`, `LOCAL_STORAGE_BUCKET`, `LOCAL_STORAGE_BASE_URL`).
+  - **Timeouts & retries** – `VALUER_HTTP_TIMEOUT_MS`, `VALUER_RETRY_ATTEMPTS`, `VALUER_RETRY_BASE_MS`, `VALUER_RETRY_MAX_MS`, `VALUER_BATCH_CONCURRENCY`, `VALUER_BATCH_HTTP_TIMEOUT_MS`.
+  - **Invaluable session helpers** – `VALUER_COOKIES`, `INVALUABLE_COOKIES`, `INVALUABLE_AZTOKEN_PROD`, `AZTOKEN_PROD`, `INVALUABLE_CF_CLEARANCE`, `CF_CLEARANCE`.
+  - **Miscellaneous** – `PORT`, `SAVE_VALUER_RESPONSES`, `PROVIDED_TIER_SPLIT`, `VALUER_JUSTIFY_*`, `VALUER_MIN_PRICE_DEFAULT`, etc.
 
-- `GOOGLE_CLOUD_PROJECT_ID`: Google Cloud project ID for Secret Manager
-- `PORT`: (Optional) Server port, defaults to 8080
-
-Optional (to improve auction search reliability via Valuer service):
-
-- `INVALUABLE_AZTOKEN_PROD` or `AZTOKEN_PROD`: Invaluable session token
-- `INVALUABLE_CF_CLEARANCE` (and/or `CF_CLEARANCE`): Cloudflare clearance cookie value
-- `VALUER_COOKIES` or `INVALUABLE_COOKIES`: JSON array of cookie objects to forward to Valuer batch (overrides the above if present)
-
-When present, these values are forwarded to the Valuer API so the underlying scraper can authenticate and avoid empty results.
-
-Secrets are managed through Google Cloud Secret Manager. The primary secret required is:
-- `OPENAI_API_KEY`: API key for OpenAI services
+The schema captures every supported flag so env-check output stays authoritative.
 
 ## File Structure
 

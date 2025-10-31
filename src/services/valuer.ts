@@ -116,16 +116,21 @@ function transformValuerLotToHit(lot: ValuerLot): ValuerHit {
 }
 
 export class ValuerService {
-  private baseUrl = (process.env.VALUER_BASE_URL || 'https://valuer-dev-856401495068.us-central1.run.app/api/search').replace(/\/?$/, '');
+  private baseUrl: string;
 
   private audienceOrigin: string;
   private cachedAuthHeader: { Authorization: string } | null = null;
+  private authEnabled: boolean;
 
   constructor() {
-    // Audience must be the service origin (no path) for Cloud Run ID tokens
+    const envBase = process.env.VALUER_BASE_URL || 'http://valuer:8080/api/search';
+    this.baseUrl = envBase.replace(/\/?$/, '');
     const parsed = new URL(this.baseUrl);
-    // If baseUrl already includes a path like /api/search, only use the origin for audience
     this.audienceOrigin = `${parsed.protocol}//${parsed.host}`;
+    const hostname = parsed.hostname.toLowerCase();
+    const isLocalHost = ['localhost', '127.0.0.1', 'valuer', 'valuer-dev', 'host.docker.internal'].includes(hostname);
+    const disableAuth = String(process.env.VALUER_AUTH_DISABLED ?? (isLocalHost ? 'true' : 'false')).toLowerCase() === 'true';
+    this.authEnabled = !disableAuth;
   }
 
   /**
@@ -209,7 +214,7 @@ export class ValuerService {
 
   private async getAuthHeader(): Promise<Record<string, string>> {
     // If explicitly disabled, skip auth header
-    if (process.env.VALUER_AUTH_DISABLED === 'true') {
+    if (!this.authEnabled || process.env.VALUER_AUTH_DISABLED === 'true') {
       return {};
     }
 

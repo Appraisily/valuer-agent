@@ -7,6 +7,8 @@ import { callOpenAIAndParseJson } from './services/utils/openai-helper.js';
 import { KeywordExtractionService } from './services/keyword-extraction.service.js';
 import { JustifierAgent } from './services/justifier-agent.js';
 import { StatisticsService } from './services/statistics-service.js';
+import { archiveJSON, storageEnabled } from './services/utils/local-storage.js';
+import { messagingEnabled, publishEvent, closeBroker } from './services/utils/messaging.js';
 
 async function getOpenAIKey() {
   const key = (process.env.OPENAI_API_KEY || '').trim();
@@ -15,8 +17,25 @@ async function getOpenAIKey() {
   return key;
 }
 
+function safeClone<T>(input: T): T | undefined {
+  if (input === null || typeof input === 'undefined') return input as T | undefined;
+  try {
+    return JSON.parse(JSON.stringify(input)) as T;
+  } catch {
+    return undefined;
+  }
+}
+
+const shouldArchiveResponses = String(process.env.VALUER_ARCHIVE_RESPONSES ?? process.env.SAVE_VALUER_RESPONSES ?? 'false').toLowerCase() === 'true';
+const archivePrefix = process.env.VALUER_ARCHIVE_PREFIX ?? 'valuer-agent/responses';
+const eventRoutingKey = process.env.MESSAGE_ROUTING_KEY ?? 'valuer.http.completed';
+
 const app = express();
 app.use(express.json());
+
+app.get('/health', (_req: Request, res: Response) => {
+  res.status(200).json({ status: 'ok' });
+});
 
 // Structured HTTP request logs (start/end with durationMs)
 app.use((req: Request, res: Response, next: NextFunction) => {
@@ -25,6 +44,16 @@ app.use((req: Request, res: Response, next: NextFunction) => {
     const inbound = req.header('X-Correlation-Id') || req.header('X-Request-Id');
     const requestId = inbound || (globalThis.crypto?.randomUUID?.() || Math.random().toString(36).slice(2));
     try { res.setHeader('x-request-id', requestId); } catch {}
+    (res.locals as Record<string, unknown>).requestId = requestId;
+    const capturedBody = typeof req.body === 'object' && req.body !== null ? safeClone(req.body) : req.body;
+    (res.locals as Record<string, unknown>).requestBody = capturedBody;
+
+    const originalJson = res.json.bind(res);
+    res.json = ((body: any) => {
+      (res.locals as Record<string, unknown>).responseBody = body;
+      return originalJson(body);
+    }) as typeof res.json;
+
     const meta: Record<string, unknown> = {
       requestId,
       correlationId: requestId,
@@ -37,6 +66,35 @@ app.use((req: Request, res: Response, next: NextFunction) => {
     console.log(JSON.stringify({ ts: new Date().toISOString(), level: 'info', context: 'HTTP', msg: 'request:start', ...meta }));
     res.on('finish', () => {
       console.log(JSON.stringify({ ts: new Date().toISOString(), level: 'info', context: 'HTTP', msg: 'request:end', ...meta, status: res.statusCode, durationMs: Date.now() - start }));
+      const summary = {
+        ...meta,
+        status: res.statusCode,
+        durationMs: Date.now() - start,
+        timestamp: new Date().toISOString()
+      };
+
+      if (messagingEnabled) {
+        publishEvent(eventRoutingKey, summary, {
+          'x-request-id': String(requestId),
+          'x-service': 'valuer-agent'
+        }).catch((err: unknown) => {
+          console.warn('[valuer-agent] Failed to publish request event:', (err as Error)?.message ?? err);
+        });
+      }
+
+      if (shouldArchiveResponses && storageEnabled) {
+        const payload = {
+          ...summary,
+          request: {
+            query: req.query,
+            body: capturedBody
+          },
+          response: (res.locals as Record<string, unknown>).responseBody
+        };
+        archiveJSON(archivePrefix, payload).catch((err: unknown) => {
+          console.warn('[valuer-agent] Failed to archive response payload:', (err as Error)?.message ?? err);
+        });
+      }
     });
   } catch {}
   next();
@@ -1087,6 +1145,20 @@ function getExampleRequestBody(path: string): any {
 
 const port = process.env.PORT || 8080;
 
+async function gracefulShutdown(signal: string) {
+  console.log(`[valuer-agent] Received ${signal}, shutting down gracefully…`);
+  try {
+    await closeBroker();
+  } catch (err) {
+    console.warn('[valuer-agent] Error closing messaging broker:', (err as Error)?.message ?? err);
+  } finally {
+    process.exit(0);
+  }
+}
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
 // Initialize OpenAI before starting server
 initializeOpenAI().then(() => {
   app.listen(port, () => {
@@ -1094,6 +1166,6 @@ initializeOpenAI().then(() => {
   });
 }).catch(error => {
   console.error('Failed to initialize OpenAI client:', error);
-  console.error('Make sure either GOOGLE_CLOUD_PROJECT_ID is set for Secret Manager OR OPENAI_API_KEY is provided directly');
+  console.error('Ensure OPENAI_API_KEY is provided via environment or Vault and reachable by the service');
   process.exit(1);
 });
