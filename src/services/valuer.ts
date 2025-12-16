@@ -1,4 +1,5 @@
 import { ValuerResponse, ValuerLot } from './types.js';
+import { ScraperDbClient, buildPublicAssetUrl } from './scraper-db.js';
 
 // Helper to detect Cloud Run/metadata server availability for ID token fetching
 async function fetchIdentityToken(audienceUrl: string): Promise<string | null> {
@@ -121,6 +122,7 @@ export class ValuerService {
   private audienceOrigin: string;
   private cachedAuthHeader: { Authorization: string } | null = null;
   private authEnabled: boolean;
+  private scraperDb: ScraperDbClient | null = null;
 
   constructor() {
     const envBase = process.env.VALUER_BASE_URL || 'http://valuer:8080/api/search';
@@ -131,6 +133,19 @@ export class ValuerService {
     const isLocalHost = ['localhost', '127.0.0.1', 'valuer', 'valuer-dev', 'host.docker.internal'].includes(hostname);
     const disableAuth = String(process.env.VALUER_AUTH_DISABLED ?? (isLocalHost ? 'true' : 'false')).toLowerCase() === 'true';
     this.authEnabled = !disableAuth;
+  }
+
+  private resolveProvider(): 'live' | 'scraper_db' | 'auto' {
+    const raw = String(process.env.VALUER_PROVIDER || process.env.VALUER_DATA_PROVIDER || 'live').toLowerCase().trim();
+    if (raw === 'scraper' || raw === 'scraperdb' || raw === 'scraper_db' || raw === 'db') return 'scraper_db';
+    if (raw === 'auto') return 'auto';
+    return 'live';
+  }
+
+  private getScraperDb(): ScraperDbClient {
+    if (this.scraperDb) return this.scraperDb;
+    this.scraperDb = new ScraperDbClient();
+    return this.scraperDb;
   }
 
   /**
@@ -380,6 +395,38 @@ export class ValuerService {
     concurrency?: number,
     saveToGcs?: boolean
   }, options?: { timeoutMs?: number; retry?: Partial<RetryConfig> }): Promise<any> {
+    const provider = this.resolveProvider();
+    if (provider === 'scraper_db') {
+      return this.batchSearchScraperDb(body);
+    }
+    if (provider === 'auto') {
+      try {
+        const res = await this.batchSearchScraperDb(body);
+        const minLots = (() => {
+          const v = Number(process.env.SCRAPER_DB_AUTO_MIN_LOTS);
+          if (Number.isFinite(v) && v >= 0) return Math.floor(v);
+          return 5;
+        })();
+        const tooSparse = Array.isArray(res?.searches)
+          ? res.searches.some((s: any) => (Array.isArray(s?.result?.data?.lots) ? s.result.data.lots.length : 0) < minLots)
+          : true;
+        if (!tooSparse) return res;
+        console.warn(`[valuer-agent] SCRAPER_DB auto-mode: sparse results (minLots=${minLots}); falling back to live provider`);
+      } catch (err: any) {
+        console.warn(`[valuer-agent] SCRAPER_DB auto-mode failed; falling back to live provider: ${err?.message || err}`);
+      }
+    }
+    return this.batchSearchLive(body, options);
+  }
+
+  private async batchSearchLive(body: {
+    searches: Array<Record<string, any>>,
+    cookies?: Array<Record<string, any>>,
+    fetchAllPages?: boolean,
+    maxPages?: number,
+    concurrency?: number,
+    saveToGcs?: boolean
+  }, options?: { timeoutMs?: number; retry?: Partial<RetryConfig> }): Promise<any> {
     const url = `${this.baseUrl}/batch`;
     // Provide cookies from env if not supplied by caller
     try {
@@ -405,5 +452,139 @@ export class ValuerService {
       throw new Error(`Failed to fetch from Valuer service: ${response.statusText}`);
     }
     return response.json();
+  }
+
+  private async batchSearchScraperDb(body: { searches: Array<Record<string, any>>; concurrency?: number }): Promise<any> {
+    const searches = Array.isArray(body?.searches) ? body.searches : [];
+    const db = this.getScraperDb();
+    const startedAt = new Date().toISOString();
+
+    const coerceNumber = (value: any): number | undefined => {
+      const n = typeof value === 'string' ? Number(value) : (typeof value === 'number' ? value : NaN);
+      if (!Number.isFinite(n)) return undefined;
+      return n;
+    };
+
+    const concurrency = (() => {
+      const requested = Number((body as any)?.concurrency);
+      if (Number.isFinite(requested) && requested > 0) return Math.min(10, Math.floor(requested));
+      const env = Number(process.env.SCRAPER_DB_CONCURRENCY);
+      if (Number.isFinite(env) && env > 0) return Math.min(10, Math.floor(env));
+      return 4;
+    })();
+
+    const runLimited = async <T>(tasks: Array<() => Promise<T>>, limit: number): Promise<PromiseSettledResult<T>[]> => {
+      const results: PromiseSettledResult<T>[] = new Array(tasks.length);
+      let nextIndex = 0;
+
+      const worker = async () => {
+        while (true) {
+          const idx = nextIndex;
+          nextIndex += 1;
+          if (idx >= tasks.length) return;
+          try {
+            const value = await tasks[idx]();
+            results[idx] = { status: 'fulfilled', value };
+          } catch (reason) {
+            results[idx] = { status: 'rejected', reason };
+          }
+        }
+      };
+
+      await Promise.all(Array.from({ length: Math.min(limit, tasks.length) }, () => worker()));
+      return results;
+    };
+
+    const tasks = searches.map((s: any) => async () => {
+      const q = String(s?.query || '').trim();
+      const minPrice = coerceNumber(s?.priceResult?.min);
+      const maxPrice = coerceNumber(s?.priceResult?.max);
+      const limit = coerceNumber(s?.limit);
+      const lots = await db.searchLots({ query: q, minPrice, maxPrice, limit });
+
+      const mappedLots: Array<Record<string, any>> = lots.map((lot) => {
+        const thumbUrl = buildPublicAssetUrl(lot.imagePath);
+        return {
+          id: lot.lotUid,
+          lot_uid: lot.lotUid,
+          title: lot.title,
+          description: lot.description,
+          auctionHouse: lot.houseName,
+          houseName: lot.houseName,
+          house: lot.houseName,
+          date: lot.auctionDate,
+          dateTimeLocal: lot.auctionDate,
+          auctionDate: lot.auctionDate,
+          price: lot.priceRealised !== null ? {
+            amount: lot.priceRealised,
+            currency: lot.currency || 'USD',
+            symbol: lot.currencySymbol || '$',
+          } : undefined,
+          priceRealised: lot.priceRealised,
+          currency: lot.currency || null,
+          currencyCode: lot.currency || null,
+          currencySymbol: lot.currencySymbol || null,
+          estimateMin: lot.estimateMin,
+          estimateMax: lot.estimateMax,
+          estimateLow: lot.estimateMin,
+          estimateHigh: lot.estimateMax,
+          lotNumber: lot.lotNumber,
+          saleType: lot.saleType,
+          url: lot.sourceUrl,
+          lotUrl: lot.sourceUrl,
+          sourceUrl: lot.sourceUrl,
+          thumbUrl,
+          thumbnail: thumbUrl,
+          image: thumbUrl,
+          thumb: thumbUrl,
+          imagePath: lot.imagePath,
+        };
+      });
+
+      const response: ValuerResponse = {
+        success: true,
+        timestamp: startedAt,
+        parameters: {
+          query: q,
+          priceResult: (minPrice !== undefined || maxPrice !== undefined) ? {
+            min: minPrice !== undefined ? String(minPrice) : '',
+            max: maxPrice !== undefined ? String(maxPrice) : '',
+          } : undefined as any,
+        },
+        data: {
+          lots: mappedLots as unknown as ValuerLot[],
+          totalResults: mappedLots.length,
+        },
+      };
+
+      return { query: q, result: response };
+    });
+
+    const results = await runLimited(tasks, concurrency);
+
+    const searchesOut = results.map((settled, idx) => {
+      if (settled.status === 'fulfilled') {
+        return settled.value;
+      }
+      const fallbackQuery = String(searches[idx]?.query || '').trim();
+      return {
+        query: fallbackQuery,
+        error: String(settled.reason?.message || settled.reason || 'scraper_db_error'),
+        result: {
+          success: false,
+          timestamp: startedAt,
+          parameters: { query: fallbackQuery },
+          data: { lots: [], totalResults: 0 },
+        },
+      };
+    });
+
+    const completed = searchesOut.filter((s: any) => !s.error).length;
+    const failed = searchesOut.length - completed;
+    return {
+      provider: 'scraper_db',
+      batch: { total: searchesOut.length, completed, failed },
+      searches: searchesOut,
+    };
   }
 }

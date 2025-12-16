@@ -41,6 +41,7 @@ npm start
   - `OPENAI_API_KEY` – the service refuses to start without an AI key.
 - Optional but commonly configured:
   - **Valuer backend** – `VALUER_BASE_URL`, `VALUER_ID_TOKEN`, `VALUER_AUTH_DISABLED`.
+  - **Scraper DB provider** – `VALUER_PROVIDER=live|scraper_db|auto`, `SCRAPER_DB_URL` (Postgres connection string to the `scraper` DB), optional `PUBLIC_ASSETS_BASE_URL` (defaults to `https://assets.appraisily.com` for lot thumbnails).
   - **Messaging** – `MESSAGE_TRANSPORT`/`MESSAGE_BROKER_URL`/`MESSAGE_EXCHANGE`/`MESSAGE_ROUTING_KEY` (set `MESSAGE_TRANSPORT=none` to disable fan-out).
   - **Archiving** – `VALUER_ARCHIVE_RESPONSES`, `VALUER_ARCHIVE_PREFIX`, local storage knobs (`LOCAL_STORAGE_ROOT`, `LOCAL_STORAGE_BUCKET`, `LOCAL_STORAGE_BASE_URL`).
   - **Timeouts & retries** – `VALUER_HTTP_TIMEOUT_MS`, `VALUER_RETRY_ATTEMPTS`, `VALUER_RETRY_BASE_MS`, `VALUER_RETRY_MAX_MS`, `VALUER_BATCH_CONCURRENCY`, `VALUER_BATCH_HTTP_TIMEOUT_MS`.
