@@ -124,6 +124,72 @@ export class ValuerService {
   private authEnabled: boolean;
   private scraperDb: ScraperDbClient | null = null;
 
+  private async publishLotThumbs(lotUids: string[]): Promise<Map<string, { thumbUrl: string | null; srcPath: string | null }>> {
+    const publishUrl = String(process.env.SCRAPPER_THUMBS_PUBLISH_URL || '').trim();
+    const apiKey = String(process.env.SCRAPPER_INTERNAL_API_KEY || '').trim();
+    if (!publishUrl || !apiKey) return new Map();
+
+    const limit = (() => {
+      const raw = process.env.SCRAPER_DB_PUBLISH_THUMBS_LIMIT;
+      const n = typeof raw === 'string' ? parseInt(raw, 10) : Number(raw);
+      if (!Number.isFinite(n) || n <= 0) return 12;
+      return Math.max(1, Math.min(100, Math.floor(n)));
+    })();
+
+    const unique: string[] = [];
+    const seen = new Set<string>();
+    for (const uid of lotUids) {
+      const s = String(uid || '').trim();
+      if (!s || seen.has(s)) continue;
+      seen.add(s);
+      unique.push(s);
+      if (unique.length >= limit) break;
+    }
+    if (!unique.length) return new Map();
+
+    const controller = new AbortController();
+    const timeoutMs = (() => {
+      const env = Number(process.env.SCRAPPER_THUMBS_PUBLISH_TIMEOUT_MS);
+      if (Number.isFinite(env) && env > 0) return Math.floor(env);
+      return 60_000;
+    })();
+    const id = setTimeout(() => controller.abort(new Error('thumb_publish_timeout')), timeoutMs);
+
+    try {
+      const res = await fetch(publishUrl, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-api-key': apiKey,
+        } as any,
+        body: JSON.stringify({ lotUids: unique, limit: unique.length }),
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        console.warn(`[valuer-agent] Thumb publish failed (${res.status}): ${text.slice(0, 300)}`);
+        return new Map();
+      }
+      const json: any = await res.json().catch(() => null);
+      const published = Array.isArray(json?.published) ? json.published : [];
+      const out = new Map<string, { thumbUrl: string | null; srcPath: string | null }>();
+      for (const item of published) {
+        const lotUid = String(item?.lotUid || '').trim();
+        if (!lotUid) continue;
+        out.set(lotUid, {
+          thumbUrl: item?.thumbUrl ? String(item.thumbUrl) : null,
+          srcPath: item?.srcPath ? String(item.srcPath) : null,
+        });
+      }
+      return out;
+    } catch (err: any) {
+      console.warn(`[valuer-agent] Thumb publish request error: ${err?.message || err}`);
+      return new Map();
+    } finally {
+      clearTimeout(id);
+    }
+  }
+
   constructor() {
     const envBase = process.env.VALUER_BASE_URL || 'http://valuer:8080/api/search';
     this.baseUrl = envBase.replace(/\/?$/, '');
@@ -541,30 +607,60 @@ export class ValuerService {
         };
       });
 
-      const response: ValuerResponse = {
-        success: true,
-        timestamp: startedAt,
-        parameters: {
-          query: q,
-          priceResult: (minPrice !== undefined || maxPrice !== undefined) ? {
-            min: minPrice !== undefined ? String(minPrice) : '',
-            max: maxPrice !== undefined ? String(maxPrice) : '',
-          } : undefined as any,
-        },
-        data: {
-          lots: mappedLots as unknown as ValuerLot[],
-          totalResults: mappedLots.length,
-        },
-      };
+      const missingLotUids = mappedLots
+        .filter((it) => !it.thumbUrl && it.lot_uid && it.imagePath)
+        .map((it) => String(it.lot_uid));
 
-      return { query: q, result: response };
+      return { query: q, minPrice, maxPrice, mappedLots, missingLotUids };
     });
 
     const results = await runLimited(tasks, concurrency);
 
+    const missingAll: string[] = [];
+    for (const settled of results) {
+      if (!settled || settled.status !== 'fulfilled') continue;
+      const uids = Array.isArray(settled.value?.missingLotUids) ? settled.value.missingLotUids : [];
+      for (const uid of uids) missingAll.push(uid);
+    }
+    const publishedThumbs = await this.publishLotThumbs(missingAll);
+
     const searchesOut = results.map((settled, idx) => {
       if (settled.status === 'fulfilled') {
-        return settled.value;
+        const q = String(settled.value?.query || '').trim();
+        const minPrice = settled.value?.minPrice;
+        const maxPrice = settled.value?.maxPrice;
+        const mappedLots = Array.isArray(settled.value?.mappedLots) ? settled.value.mappedLots : [];
+
+        // Patch in published thumbs (if any)
+        for (const lot of mappedLots) {
+          const lotUid = String(lot?.lot_uid || lot?.id || '').trim();
+          if (!lotUid) continue;
+          const published = publishedThumbs.get(lotUid);
+          if (!published || !published.thumbUrl) continue;
+          lot.thumbUrl = published.thumbUrl;
+          lot.thumbnail = published.thumbUrl;
+          lot.image = published.thumbUrl;
+          lot.thumb = published.thumbUrl;
+          if (published.srcPath) lot.imagePath = published.srcPath;
+        }
+
+        const response: ValuerResponse = {
+          success: true,
+          timestamp: startedAt,
+          parameters: {
+            query: q,
+            priceResult: (minPrice !== undefined || maxPrice !== undefined) ? {
+              min: minPrice !== undefined ? String(minPrice) : '',
+              max: maxPrice !== undefined ? String(maxPrice) : '',
+            } : undefined as any,
+          },
+          data: {
+            lots: mappedLots as unknown as ValuerLot[],
+            totalResults: mappedLots.length,
+          },
+        };
+
+        return { query: q, result: response };
       }
       const fallbackQuery = String(searches[idx]?.query || '').trim();
       return {

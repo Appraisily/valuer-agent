@@ -471,7 +471,7 @@ app.post('/api/multi-search', asyncHandler(async (req, res) => {
     : (HAS_ENV_CAP ? Math.ceil(_envEarlyStop) : Infinity);
   const tBatch0 = Date.now();
   // Aggregate compact items for summarization and UI
-  type CompactItem = { title?: string; price?: { amount?: number; currency?: string }; auctionHouse?: string; date?: string; url?: string };
+  type CompactItem = { title?: string; price?: { amount?: number; currency?: string }; auctionHouse?: string; date?: string; url?: string; thumbUrl?: string };
   const uniqueTitles = new Set<string>();
   let aggregated: CompactItem[] = [];
   const byQuery: any[] = [];
@@ -571,12 +571,14 @@ app.post('/api/multi-search', asyncHandler(async (req, res) => {
         uniqueTitles.add(title);
         const priceAmount = (lot?.price && typeof lot.price.amount === 'number') ? lot.price.amount : (typeof lot?.priceResult === 'number' ? lot.priceResult : undefined);
         const currency = lot?.price?.currency || lot?.currency || lot?.currencyCode || 'USD';
+        const thumbUrl: string | undefined = lot?.thumbUrl || lot?.thumbnail || lot?.thumb || lot?.image || lot?.imageUrl;
         aggregated.push({
           title,
           price: priceAmount ? { amount: priceAmount, currency } : undefined,
           auctionHouse: lot?.auctionHouse || lot?.house || lot?.houseName,
           date: lot?.date || lot?.dateTimeLocal,
-          url: lot?.url || lot?.lotUrl || lot?.permalink
+          url: lot?.url || lot?.lotUrl || lot?.permalink,
+          thumbUrl: thumbUrl ? String(thumbUrl) : undefined,
         });
         addedThisTier++;
         if (aggregated.length >= MAX_ITEMS_TOTAL) break;
@@ -622,12 +624,14 @@ app.post('/api/multi-search', asyncHandler(async (req, res) => {
           uniqueTitles.add(title);
           const priceAmount = (lot?.price && typeof lot.price.amount === 'number') ? lot.price.amount : (typeof lot?.priceResult === 'number' ? lot.priceResult : undefined);
           const currency = lot?.price?.currency || lot?.currency || lot?.currencyCode || 'USD';
+          const thumbUrl: string | undefined = lot?.thumbUrl || lot?.thumbnail || lot?.thumb || lot?.image || lot?.imageUrl;
           aggregated.push({
             title,
             price: priceAmount ? { amount: priceAmount, currency } : undefined,
             auctionHouse: lot?.auctionHouse || lot?.house || lot?.houseName,
             date: lot?.date || lot?.dateTimeLocal,
-            url: lot?.url || lot?.lotUrl || lot?.permalink
+            url: lot?.url || lot?.lotUrl || lot?.permalink,
+            thumbUrl: thumbUrl ? String(thumbUrl) : undefined,
           });
           if (aggregated.length >= MAX_ITEMS_TOTAL) break;
         }
@@ -663,7 +667,13 @@ app.post('/api/multi-search', asyncHandler(async (req, res) => {
   const doSummarize = !skipSummary && !forceSkip;
   if (doSummarize) {
     try {
-      const itemsJson = JSON.stringify(aggregated.slice(0, 60));
+      const itemsJson = JSON.stringify(aggregated.slice(0, 60).map((it) => ({
+        title: it.title,
+        price: it.price,
+        auctionHouse: it.auctionHouse,
+        date: it.date,
+        url: it.url,
+      })));
       const summaryPrompt = (() => {
         if (justifyMode && typeof targetValue === 'number' && isFinite(targetValue)) {
           return [
