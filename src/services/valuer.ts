@@ -526,6 +526,8 @@ export class ValuerService {
     const startedAt = new Date().toISOString();
 
     const coerceNumber = (value: any): number | undefined => {
+      if (value === null || value === undefined) return undefined;
+      if (typeof value === 'string' && value.trim() === '') return undefined;
       const n = typeof value === 'string' ? Number(value) : (typeof value === 'number' ? value : NaN);
       if (!Number.isFinite(n)) return undefined;
       return n;
