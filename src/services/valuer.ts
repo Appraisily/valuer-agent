@@ -473,11 +473,15 @@ export class ValuerService {
           if (Number.isFinite(v) && v >= 0) return Math.floor(v);
           return 5;
         })();
-        const tooSparse = Array.isArray(res?.searches)
-          ? res.searches.some((s: any) => (Array.isArray(s?.result?.data?.lots) ? s.result.data.lots.length : 0) < minLots)
-          : true;
+        const searches = Array.isArray(res?.searches) ? res.searches : [];
+        const totalLots = searches.reduce((sum: number, s: any) => {
+          const n = Array.isArray(s?.result?.data?.lots) ? s.result.data.lots.length : 0;
+          return sum + n;
+        }, 0);
+        const minTotalLots = Math.max(minLots, minLots * Math.min(2, searches.length || 1));
+        const tooSparse = totalLots < minTotalLots;
         if (!tooSparse) return res;
-        console.warn(`[valuer-agent] SCRAPER_DB auto-mode: sparse results (minLots=${minLots}); falling back to live provider`);
+        console.warn(`[valuer-agent] SCRAPER_DB auto-mode: sparse results (totalLots=${totalLots}, minTotalLots=${minTotalLots}); falling back to live provider`);
       } catch (err: any) {
         console.warn(`[valuer-agent] SCRAPER_DB auto-mode failed; falling back to live provider: ${err?.message || err}`);
       }

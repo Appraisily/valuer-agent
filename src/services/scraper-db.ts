@@ -6,6 +6,97 @@ import path from 'node:path';
 type CurrencyCode = string | null | undefined;
 type NullableString = string | null | undefined;
 
+const QUERY_STOPWORDS = new Set([
+  'a',
+  'an',
+  'and',
+  'are',
+  'as',
+  'at',
+  'by',
+  'for',
+  'from',
+  'in',
+  'into',
+  'is',
+  'it',
+  'of',
+  'on',
+  'or',
+  'the',
+  'to',
+  'with',
+]);
+
+// Very common lot/title tokens that should not be treated as "anchors" (artist/maker tokens).
+const QUERY_COMMON_TOKENS = new Set([
+  'acrylic',
+  'artist',
+  'canvas',
+  'ceramic',
+  'china',
+  'etching',
+  'frame',
+  'framed',
+  'giclee',
+  'hand',
+  'lithograph',
+  'mixed',
+  'oil',
+  'original',
+  'paint',
+  'painting',
+  'paper',
+  'print',
+  'serigraph',
+  'signed',
+  'sketch',
+  'watercolor',
+]);
+
+function tokenizeQuery(value: string): string[] {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]+/g, ' ')
+    .split(/\s+/)
+    .map((t) => t.trim())
+    .filter(Boolean);
+}
+
+function buildAnchorTsQueries(query: string): { must: string | null; optionalOr: string | null } {
+  const tokens = tokenizeQuery(query);
+  if (!tokens.length) return { must: null, optionalOr: null };
+
+  const anchors: string[] = [];
+  for (const token of tokens) {
+    if (token.length < 3) break;
+    if (QUERY_STOPWORDS.has(token)) break;
+    if (QUERY_COMMON_TOKENS.has(token)) break;
+    if (/^\d+$/.test(token)) break;
+    anchors.push(token);
+    if (anchors.length >= 2) break;
+  }
+
+  if (!anchors.length) return { must: null, optionalOr: null };
+
+  const optional: string[] = [];
+  const optionalSeen = new Set<string>();
+  for (const token of tokens) {
+    if (token.length < 3) continue;
+    if (QUERY_STOPWORDS.has(token)) continue;
+    if (anchors.includes(token)) continue;
+    const key = token.toLowerCase();
+    if (optionalSeen.has(key)) continue;
+    optionalSeen.add(key);
+    optional.push(token);
+    if (optional.length >= 8) break;
+  }
+
+  const must = anchors.map((t) => `${t}:*`).join(' & ');
+  const optionalOr = optional.length ? optional.map((t) => `${t}:*`).join(' | ') : null;
+  return { must, optionalOr };
+}
+
 export type ScraperDbSearchParams = {
   query: string;
   minPrice?: number;
@@ -235,8 +326,10 @@ export class ScraperDbClient {
     const minPrice = Number.isFinite(params.minPrice as number) ? Number(params.minPrice) : null;
     const maxPrice = Number.isFinite(params.maxPrice as number) ? Number(params.maxPrice) : null;
 
+    const anchor = buildAnchorTsQueries(query);
+
     const sql = `
-      WITH ranked AS (
+      WITH strict_matches AS (
         SELECT
           l.lot_uid,
           l.title,
@@ -251,6 +344,7 @@ export class ScraperDbClient {
           l.lot_number,
           l.sale_type,
           l.source_url,
+          true AS is_strict,
           ts_rank_cd(
             to_tsvector('simple', coalesce(l.title,'') || ' ' || coalesce(l.description,'')),
             plainto_tsquery('simple', $1)
@@ -264,9 +358,76 @@ export class ScraperDbClient {
           AND ($3::numeric IS NULL OR l.price_realised <= $3)
         ORDER BY rank DESC, l.auction_date DESC NULLS LAST, l.lot_uid DESC
         LIMIT $4
+      ),
+      anchor_matches AS (
+        SELECT
+          l.lot_uid,
+          l.title,
+          l.description,
+          l.house_name,
+          l.auction_date,
+          l.price_realised,
+          l.currency,
+          l.currency_symbol,
+          l.estimate_min,
+          l.estimate_max,
+          l.lot_number,
+          l.sale_type,
+          l.source_url,
+          false AS is_strict,
+          (
+            ts_rank_cd(
+              to_tsvector('simple', coalesce(l.title,'') || ' ' || coalesce(l.description,'')),
+              CASE
+                WHEN $5::text IS NULL OR btrim($5) = '' THEN NULL
+                ELSE to_tsquery('simple', $5)
+              END
+            ) * 2.0
+            + (
+              CASE
+                WHEN $6::text IS NULL OR btrim($6) = '' THEN 0
+                ELSE ts_rank_cd(
+                  to_tsvector('simple', coalesce(l.title,'') || ' ' || coalesce(l.description,'')),
+                  to_tsquery('simple', $6)
+                ) * 0.15
+              END
+            )
+          ) AS rank
+        FROM lots l
+        WHERE
+          to_tsvector('simple', coalesce(l.title,'') || ' ' || coalesce(l.description,'')) @@ (
+            CASE
+              WHEN $5::text IS NULL OR btrim($5) = '' THEN NULL
+              ELSE to_tsquery('simple', $5)
+            END
+          )
+          AND l.price_realised IS NOT NULL
+          AND l.price_realised > 0
+          AND ($2::numeric IS NULL OR l.price_realised >= $2)
+          AND ($3::numeric IS NULL OR l.price_realised <= $3)
+          AND NOT EXISTS (SELECT 1 FROM strict_matches s WHERE s.lot_uid = l.lot_uid)
+        ORDER BY rank DESC, l.auction_date DESC NULLS LAST, l.lot_uid DESC
+        LIMIT GREATEST(0, $4 - (SELECT COUNT(*) FROM strict_matches))
+      ),
+      ranked AS (
+        SELECT * FROM strict_matches
+        UNION ALL
+        SELECT * FROM anchor_matches
       )
       SELECT
-        r.*,
+        r.lot_uid,
+        r.title,
+        r.description,
+        r.house_name,
+        r.auction_date,
+        r.price_realised,
+        r.currency,
+        r.currency_symbol,
+        r.estimate_min,
+        r.estimate_max,
+        r.lot_number,
+        r.sale_type,
+        r.source_url,
         lead_img.image_filename AS image_filename,
         lead_img.src_path AS image_src_path,
         lead_img.gcs_path AS image_gcs_path
@@ -278,9 +439,10 @@ export class ScraperDbClient {
         ORDER BY i.ordinal NULLS LAST, i.image_filename
         LIMIT 1
       ) AS lead_img ON TRUE
+      ORDER BY r.is_strict DESC, r.rank DESC, r.auction_date DESC NULLS LAST, r.lot_uid DESC
     `;
 
-    const result = await this.pool.query(sql, [query, minPrice, maxPrice, limit]);
+    const result = await this.pool.query(sql, [query, minPrice, maxPrice, limit, anchor.must, anchor.optionalOr]);
     const rows = Array.isArray(result.rows) ? result.rows : [];
     const mediaRoot = normalizeMediaRoot(process.env.SCRAPER_DB_MEDIA_ROOT) || DEFAULT_MEDIA_ROOT;
     const categories = await getCategoryIndex(mediaRoot);
