@@ -132,7 +132,19 @@ export class MarketDataService {
           limit: searchLimit
         }));
 
-        const batch = await this.valuer.multiSearch(batchInputs);
+        let batch: Array<{ query: string; hits: any[] }>;
+        if (typeof (this.valuer as any).multiSearch === 'function') {
+          batch = await this.valuer.multiSearch(batchInputs);
+        } else {
+          let fallbackHits: any[] = [];
+          try {
+            const response = await this.valuer.search(query, queryMinPrice, maxPrice, searchLimit);
+            fallbackHits = response?.hits || [];
+          } catch (err) {
+            console.warn(`Fallback search failed for "${query}": ${err instanceof Error ? err.message : String(err)}`);
+          }
+          batch = [{ query, hits: fallbackHits }];
+        }
         // Take the first result as the primary; enqueue the others into allResults opportunistically
         const primary = batch.find(b => b.query === query) || batch[0];
         const simplifiedData = this.simplifyAuctionData({ hits: primary?.hits || [] });

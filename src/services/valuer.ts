@@ -125,7 +125,7 @@ export class ValuerService {
   private scraperDb: ScraperDbClient | null = null;
 
   private async publishLotThumbs(lotUids: string[]): Promise<Map<string, { thumbUrl: string | null; srcPath: string | null }>> {
-    const publishUrl = String(process.env.SCRAPPER_THUMBS_PUBLISH_URL || '').trim();
+    const publishUrl = String(process.env.SCRAPPER_THUMBS_PUBLISH_URL || 'http://scrapper:8080/api/lot-thumbs/publish').trim();
     const apiKey = String(process.env.SCRAPPER_INTERNAL_API_KEY || '').trim();
     if (!publishUrl || !apiKey) return new Map();
 
@@ -202,7 +202,11 @@ export class ValuerService {
   }
 
   private resolveProvider(): 'live' | 'scraper_db' | 'auto' {
-    const raw = String(process.env.VALUER_PROVIDER || process.env.VALUER_DATA_PROVIDER || 'live').toLowerCase().trim();
+    const explicit = process.env.VALUER_PROVIDER || process.env.VALUER_DATA_PROVIDER;
+    const raw = String(explicit || '').toLowerCase().trim();
+    if (!raw) {
+      return process.env.SCRAPER_DB_URL ? 'scraper_db' : 'auto';
+    }
     if (raw === 'scraper' || raw === 'scraperdb' || raw === 'scraper_db' || raw === 'db') return 'scraper_db';
     if (raw === 'auto') return 'auto';
     return 'live';
@@ -383,7 +387,7 @@ export class ValuerService {
     // Initial search with the original keyword and a potentially larger internal limit
     // Fetch more initially (e.g., limit * 2) to allow for better merging/filtering later
     const initialLimit = limit * 2;
-    let results = await this.search(keyword, minPrice, undefined, initialLimit, options);
+    const results = await this.search(keyword, minPrice, undefined, initialLimit, options);
     const allHits = [...results.hits];
     const seenTitles = new Set(allHits.map(hit => hit.lotTitle));
 

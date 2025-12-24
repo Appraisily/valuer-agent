@@ -60,10 +60,11 @@ export class JustifierAgent {
         userPrompt: prompt,
         expectJsonResponse: true
       });
-      console.log('\n=== AI Standard Search Strategy ===\nGenerated queries:', 
-        response.slice(0, 10).map((q: string, i: number) => `${i + 1}. ${q}`).join('\n')
+      const terms = Array.isArray(response) ? response : [text];
+      console.log('\n=== AI Standard Search Strategy ===\nGenerated queries:',
+        terms.slice(0, 10).map((q: string, i: number) => `${i + 1}. ${q}`).join('\n')
       );
-      return Array.isArray(response) ? response : [text];
+      return terms;
     } catch (error) {
       console.warn('Failed to get standard search strategy from AI, falling back to text:', error);
       return [text];
@@ -178,15 +179,17 @@ export class JustifierAgent {
   }
 
   private processValueRangeResponse(response: ValueRangeAIResponse, useAccurateModel: boolean): ValueRangeResponse {
-      let { 
-          minValue = 0, 
-          maxValue = 0, 
-          mostLikelyValue = 0, 
-          explanation = 'Unable to generate explanation', 
-          auctionResults = [], 
-          confidenceLevel = 70, 
-          marketTrend = 'stable', 
-          keyFactors = [], 
+      let {
+          minValue = 0,
+          maxValue = 0,
+          mostLikelyValue = 0
+      } = response;
+      const {
+          explanation = 'Unable to generate explanation',
+          auctionResults = [],
+          confidenceLevel = 70,
+          marketTrend = 'stable',
+          keyFactors = [],
           dataQuality = 'medium'
       } = response;
 

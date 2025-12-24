@@ -140,7 +140,7 @@ export class MarketDataAggregatorService {
         console.log(`\n--- Extra Search Attempt: Only found ${allItems.length}/${targetCount} items. Trying broader search. ---`);
         
         // Combine all query levels, prioritizing broader terms as they might find different results
-        let extraQueries = [
+        const extraQueries = [
             ...(queryGroups['broad'] || []), 
             ...(queryGroups['moderate'] || []),
             ...(queryGroups['specific'] || [])

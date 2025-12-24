@@ -473,10 +473,10 @@ app.post('/api/multi-search', asyncHandler(async (req, res) => {
   // Aggregate compact items for summarization and UI
   type CompactItem = { title?: string; price?: { amount?: number; currency?: string }; auctionHouse?: string; date?: string; url?: string; thumbUrl?: string };
   const uniqueTitles = new Set<string>();
-  let aggregated: CompactItem[] = [];
+  const aggregated: CompactItem[] = [];
   const byQuery: any[] = [];
   const allExecutedQueries: string[] = [];
-  let cumulativeStats = { total: 0, completed: 0, failed: 0, durationMs: 0 };
+  const cumulativeStats = { total: 0, completed: 0, failed: 0, durationMs: 0 };
   // Build tiered queries. Prefer caller-provided terms when present to keep WS as the owner of term generation.
   let tiers: Array<{ name: string; terms: string[] }>;
   if (Array.isArray(terms) && terms.length > 0) {
@@ -516,6 +516,7 @@ app.post('/api/multi-search', asyncHandler(async (req, res) => {
   }
 
   let remainingBudget = typeof maxQueries === 'number' ? Math.max(1, maxQueries) : Infinity;
+  let capLogged = false;
   for (let i = 0; i < tiers.length; i++) {
     const tier = tiers[i];
     if (remainingBudget <= 0) break;
@@ -561,11 +562,17 @@ app.post('/api/multi-search', asyncHandler(async (req, res) => {
     remainingBudget = isFinite(remainingBudget) ? Math.max(0, remainingBudget - tierTerms.length) : remainingBudget;
 
     const preCount = aggregated.length;
-    let addedThisTier = 0;
     for (const s of batchTier.searches || []) {
       const lots = s?.result?.data?.lots || [];
       const meta = { query: s?.query || '', lotsCount: Array.isArray(lots) ? lots.length : 0, error: s?.error || undefined };
       for (const lot of lots) {
+        if (Number.isFinite(MAX_ITEMS_TOTAL) && aggregated.length >= MAX_ITEMS_TOTAL) {
+          if (!capLogged) {
+            console.log(`Cap reached at ${MAX_ITEMS_TOTAL} unique lots. Continuing to execute remaining tiers without collecting additional items.`);
+            capLogged = true;
+          }
+          break;
+        }
         const title: string | undefined = lot?.title || lot?.lotTitle;
         if (!title || uniqueTitles.has(title)) continue;
         uniqueTitles.add(title);
@@ -580,18 +587,11 @@ app.post('/api/multi-search', asyncHandler(async (req, res) => {
           url: lot?.url || lot?.lotUrl || lot?.permalink,
           thumbUrl: thumbUrl ? String(thumbUrl) : undefined,
         });
-        addedThisTier++;
-        if (aggregated.length >= MAX_ITEMS_TOTAL) break;
       }
-      if (aggregated.length >= MAX_ITEMS_TOTAL) break;
       byQuery.push({ ...s, meta });
     }
     const added = aggregated.length - preCount;
     console.log(`Tier="${tier.name}" contributed ${added} unique lots (total=${aggregated.length})`);
-    if (Number.isFinite(MAX_ITEMS_TOTAL) && aggregated.length >= MAX_ITEMS_TOTAL) {
-      console.log(`Cap reached at ${MAX_ITEMS_TOTAL} unique lots. Halting further tiers.`);
-      break;
-    }
   }
 
   // Aggregation complete; proceed to optional fallback if needed
@@ -619,6 +619,13 @@ app.post('/api/multi-search', asyncHandler(async (req, res) => {
         const lots = s?.result?.data?.lots || [];
         const meta = { query: s?.query || '', lotsCount: Array.isArray(lots) ? lots.length : 0, error: s?.error || undefined };
         for (const lot of lots) {
+          if (Number.isFinite(MAX_ITEMS_TOTAL) && aggregated.length >= MAX_ITEMS_TOTAL) {
+            if (!capLogged) {
+              console.log(`Cap reached at ${MAX_ITEMS_TOTAL} unique lots. Continuing to execute remaining queries without collecting additional items.`);
+              capLogged = true;
+            }
+            break;
+          }
           const title: string | undefined = lot?.title || lot?.lotTitle;
           if (!title || uniqueTitles.has(title)) continue;
           uniqueTitles.add(title);
@@ -633,9 +640,7 @@ app.post('/api/multi-search', asyncHandler(async (req, res) => {
             url: lot?.url || lot?.lotUrl || lot?.permalink,
             thumbUrl: thumbUrl ? String(thumbUrl) : undefined,
           });
-          if (aggregated.length >= MAX_ITEMS_TOTAL) break;
         }
-        if (aggregated.length >= MAX_ITEMS_TOTAL) break;
         byQuery.push({ ...s, meta });
       }
     } catch (e) {
@@ -853,7 +858,7 @@ app.post('/v2/search/batch', asyncHandler(async (req, res) => {
     }
 
     const uniqueTitles2 = new Set<string>();
-    let aggregated2: Array<{ title?: string; price?: { amount?: number; currency?: string }; auctionHouse?: string; date?: string; url?: string }> = [];
+    const aggregated2: Array<{ title?: string; price?: { amount?: number; currency?: string }; auctionHouse?: string; date?: string; url?: string }> = [];
     const byQuery2: any[] = [];
     const allExecuted2: Array<{ term: string; tier: string }> = [];
     const tStart2 = Date.now();
@@ -936,10 +941,10 @@ app.post('/v2/search/batch', asyncHandler(async (req, res) => {
   }
 
   const uniqueTitles = new Set<string>();
-  let aggregated: Array<{ title?: string; price?: { amount?: number; currency?: string }; auctionHouse?: string; date?: string; url?: string }> = [];
+  const aggregated: Array<{ title?: string; price?: { amount?: number; currency?: string }; auctionHouse?: string; date?: string; url?: string }> = [];
   const byQuery: any[] = [];
   const allExecuted: Array<{ term: string; tier: string }> = [];
-  let batchTotals = { total: 0, completed: 0, failed: 0 };
+  const batchTotals = { total: 0, completed: 0, failed: 0 };
   const tStart = Date.now();
 
   for (let i = 0; i < tiers.length; i++) {

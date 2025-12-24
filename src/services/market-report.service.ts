@@ -364,7 +364,7 @@ export class MarketReportService {
             const diffFormatted = priceDiff >= 0 ? `+${priceDiff.toFixed(1)}%` : `${priceDiff.toFixed(1)}%`;
             
             // Include quality score in the output if available
-            let formatted: FormattedAuctionItem = {
+            const formatted: FormattedAuctionItem = {
                 ...result,
                 diff: diffFormatted,
                 is_current: false
