@@ -473,7 +473,7 @@ app.post('/api/multi-search', asyncHandler(async (req, res) => {
   // Aggregate compact items for summarization and UI
   type CompactItem = { title?: string; price?: { amount?: number; currency?: string }; auctionHouse?: string; date?: string; url?: string; thumbUrl?: string };
   const uniqueTitles = new Set<string>();
-  const aggregated: CompactItem[] = [];
+  let aggregated: CompactItem[] = [];
   const byQuery: any[] = [];
   const allExecutedQueries: string[] = [];
   const cumulativeStats = { total: 0, completed: 0, failed: 0, durationMs: 0 };
