@@ -32,26 +32,51 @@ const QUERY_STOPWORDS = new Set([
 const QUERY_COMMON_TOKENS = new Set([
   'acrylic',
   'artist',
+  'bronze',
   'canvas',
   'ceramic',
   'china',
+  'enamel',
   'etching',
   'frame',
   'framed',
   'giclee',
+  'gilt',
+  'glass',
+  'gold',
   'hand',
+  'ivory',
   'lithograph',
+  'marble',
+  'metal',
   'mixed',
   'oil',
   'original',
   'paint',
   'painting',
   'paper',
+  'plaster',
+  'porcelain',
   'print',
+  'resin',
+  'silver',
+  'stone',
   'serigraph',
   'signed',
   'sketch',
   'watercolor',
+
+  // Sculpture-ish words that commonly lead queries but are too generic to anchor on.
+  'carved',
+  'carving',
+  'figure',
+  'figural',
+  'figurine',
+  'sculpture',
+  'sculptures',
+  'statue',
+  'wood',
+  'wooden',
 ]);
 
 function tokenizeQuery(value: string): string[] {
@@ -67,12 +92,15 @@ function buildAnchorTsQueries(query: string): { must: string | null; optionalOr:
   const tokens = tokenizeQuery(query);
   if (!tokens.length) return { must: null, optionalOr: null };
 
+  // Prefer maker/subject-like tokens for anchors.
+  // Many user queries begin with generic phrases like "carved wood sculpture", which previously
+  // caused anchors to be ["carved","wood"] and returned irrelevant items (e.g., furniture).
   const anchors: string[] = [];
   for (const token of tokens) {
-    if (token.length < 3) break;
-    if (QUERY_STOPWORDS.has(token)) break;
-    if (QUERY_COMMON_TOKENS.has(token)) break;
-    if (/^\d+$/.test(token)) break;
+    if (token.length < 3) continue;
+    if (QUERY_STOPWORDS.has(token)) continue;
+    if (QUERY_COMMON_TOKENS.has(token)) continue;
+    if (/^\d+$/.test(token)) continue;
     anchors.push(token);
     if (anchors.length >= 2) break;
   }
