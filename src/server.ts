@@ -1,4 +1,5 @@
 import express, { Request, Response, NextFunction } from 'express';
+import type { RequestHandler } from 'express';
 import { z, ZodError } from 'zod';
 import OpenAI from 'openai';
 import { ValuerService } from './services/valuer.js';
@@ -9,6 +10,7 @@ import { JustifierAgent } from './services/justifier-agent.js';
 import { StatisticsService } from './services/statistics-service.js';
 import { archiveJSON, storageEnabled } from './services/utils/local-storage.js';
 import { messagingEnabled, publishEvent, closeBroker } from './services/utils/messaging.js';
+import { createRequire } from 'module';
 
 async function getOpenAIKey() {
   const key = (process.env.OPENAI_API_KEY || '').trim();
@@ -31,6 +33,12 @@ const archivePrefix = process.env.VALUER_ARCHIVE_PREFIX ?? 'valuer-agent/respons
 const eventRoutingKey = process.env.MESSAGE_ROUTING_KEY ?? 'valuer.http.completed';
 
 const app = express();
+const require = createRequire(import.meta.url);
+type CorsModule = { createCorsMiddleware: (options?: Record<string, unknown>) => RequestHandler };
+const { createCorsMiddleware } = require('../../_shared/cors') as CorsModule;
+const corsMiddleware = createCorsMiddleware({ logger: console });
+app.use(corsMiddleware);
+app.options('*', corsMiddleware);
 app.use(express.json());
 
 app.get('/health', (_req: Request, res: Response) => {
