@@ -12,9 +12,11 @@ RUN npm install
 COPY ${SERVICE_DIR}/ ./
 COPY ${SHARED_DIR}/messaging /usr/src/app/_shared/messaging
 COPY ${SHARED_DIR}/local-storage /usr/src/app/_shared/local-storage
+COPY ${SHARED_DIR}/cors /usr/src/app/_shared/cors
 # Maintain compatibility for dist builds that resolve from /usr/src/_shared
 COPY ${SHARED_DIR}/messaging /usr/src/_shared/messaging
 COPY ${SHARED_DIR}/local-storage /usr/src/_shared/local-storage
+COPY ${SHARED_DIR}/cors /usr/src/_shared/cors
 
 # Tools shared for env validation (the app's env-check uses ../../env-governance)
 COPY ${ENV_GOVERNANCE_DIR}/ /usr/env-governance/

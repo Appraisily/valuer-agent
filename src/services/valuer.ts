@@ -463,7 +463,8 @@ export class ValuerService {
     fetchAllPages?: boolean,
     maxPages?: number,
     concurrency?: number,
-    saveToGcs?: boolean
+    saveToGcs?: boolean,
+    skipThumbPublish?: boolean,
   }, options?: { timeoutMs?: number; retry?: Partial<RetryConfig> }): Promise<any> {
     const provider = this.resolveProvider();
     if (provider === 'scraper_db') {
@@ -499,7 +500,8 @@ export class ValuerService {
     fetchAllPages?: boolean,
     maxPages?: number,
     concurrency?: number,
-    saveToGcs?: boolean
+    saveToGcs?: boolean,
+    skipThumbPublish?: boolean,
   }, options?: { timeoutMs?: number; retry?: Partial<RetryConfig> }): Promise<any> {
     const url = `${this.baseUrl}/batch`;
     // Provide cookies from env if not supplied by caller
@@ -528,10 +530,16 @@ export class ValuerService {
     return response.json();
   }
 
-  private async batchSearchScraperDb(body: { searches: Array<Record<string, any>>; concurrency?: number }): Promise<any> {
+  private async batchSearchScraperDb(body: { searches: Array<Record<string, any>>; concurrency?: number; skipThumbPublish?: boolean }): Promise<any> {
     const searches = Array.isArray(body?.searches) ? body.searches : [];
     const db = this.getScraperDb();
     const startedAt = new Date().toISOString();
+
+    const skipThumbPublish = (() => {
+      if ((body as any)?.skipThumbPublish) return true;
+      const raw = String(process.env.SCRAPER_DB_PUBLISH_THUMBS_DISABLED || '').toLowerCase().trim();
+      return raw === '1' || raw === 'true' || raw === 'yes';
+    })();
 
     const coerceNumber = (value: any): number | undefined => {
       if (value === null || value === undefined) return undefined;
@@ -626,13 +634,21 @@ export class ValuerService {
 
     const results = await runLimited(tasks, concurrency);
 
-    const missingAll: string[] = [];
-    for (const settled of results) {
-      if (!settled || settled.status !== 'fulfilled') continue;
-      const uids = Array.isArray(settled.value?.missingLotUids) ? settled.value.missingLotUids : [];
-      for (const uid of uids) missingAll.push(uid);
+    const publishedThumbs = (() => {
+      if (skipThumbPublish) return new Map<string, { thumbUrl: string | null; srcPath: string | null }>();
+      return null as any;
+    })();
+
+    if (!skipThumbPublish) {
+      const missingAll: string[] = [];
+      for (const settled of results) {
+        if (!settled || settled.status !== 'fulfilled') continue;
+        const uids = Array.isArray(settled.value?.missingLotUids) ? settled.value.missingLotUids : [];
+        for (const uid of uids) missingAll.push(uid);
+      }
+      const published = await this.publishLotThumbs(missingAll);
+      for (const [key, value] of published.entries()) publishedThumbs.set(key, value);
     }
-    const publishedThumbs = await this.publishLotThumbs(missingAll);
 
     const searchesOut = results.map((settled, idx) => {
       if (settled.status === 'fulfilled') {

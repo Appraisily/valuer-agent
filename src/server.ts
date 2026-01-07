@@ -879,10 +879,16 @@ app.post('/v2/search/batch', asyncHandler(async (req, res) => {
     });
 
     const t0 = Date.now();
+    const skipThumbPublish = (() => {
+      const rev = typeof ctx.rev === 'string' ? ctx.rev : '';
+      return rev.startsWith('instant-appraisal');
+    })();
+
     const batch = await valuer.batchSearch({
       searches,
       concurrency: Math.min(concurrency, searches.length),
-      fetchAllPages: false
+      fetchAllPages: false,
+      skipThumbPublish,
     }, batchOptions);
     const batchDuration = Date.now() - t0;
     console.log(`Batch search completed: total=${batch?.batch?.total || searches.length}, completed=${batch?.batch?.completed || 0}, failed=${batch?.batch?.failed || 0}, concurrency=${Math.min(concurrency, searches.length)}, durationMs=${batchDuration}`);
