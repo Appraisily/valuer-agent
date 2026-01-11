@@ -634,10 +634,9 @@ export class ValuerService {
 
     const results = await runLimited(tasks, concurrency);
 
-    const publishedThumbs = (() => {
-      if (skipThumbPublish) return new Map<string, { thumbUrl: string | null; srcPath: string | null }>();
-      return null as any;
-    })();
+    // Always use a Map so downstream `.get()`/`.set()` calls cannot crash.
+    // When publishing is disabled, this stays empty and is simply a no-op.
+    const publishedThumbs = new Map<string, { thumbUrl: string | null; srcPath: string | null }>();
 
     if (!skipThumbPublish) {
       const missingAll: string[] = [];
