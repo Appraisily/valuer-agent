@@ -183,6 +183,7 @@ function normalizeMediaRoot(value: NullableString): string {
 }
 
 const DEFAULT_MEDIA_ROOT = '/mnt/srv-storage/scrapper-db-data/data';
+const DEFAULT_PUBLIC_ASSETS_ROOT = '/mnt/srv-storage/storage/public';
 const categoryIndexCache = new Map<string, Promise<Set<string>>>();
 
 async function getCategoryIndex(mediaRoot: string): Promise<Set<string>> {
@@ -220,6 +221,29 @@ function cachedExists(filePath: string): boolean {
   return exists;
 }
 
+function normalizePublicAssetsRoot(value: NullableString): string {
+  const raw = String(value || process.env.PUBLIC_STORAGE_ROOT || DEFAULT_PUBLIC_ASSETS_ROOT).trim();
+  return raw ? raw.replace(/\/+$/, '') : DEFAULT_PUBLIC_ASSETS_ROOT;
+}
+
+export function isPublishedAssetPath(relativePath: NullableString): boolean {
+  const clean = String(relativePath || '').trim().replace(/^[\\/]+/, '').replace(/\\/g, '/');
+  return clean.startsWith('auction-lots/');
+}
+
+function resolvePublishedAssetAbsolutePath(relativePath: NullableString, publicRoot?: NullableString): string | null {
+  if (!isPublishedAssetPath(relativePath)) return null;
+  const clean = String(relativePath || '').trim().replace(/^[\\/]+/, '').replace(/\\/g, '/');
+  const root = normalizePublicAssetsRoot(publicRoot);
+  return path.resolve(root, clean);
+}
+
+export function publishedAssetExists(relativePath: NullableString, publicRoot?: NullableString): boolean {
+  const absolutePath = resolvePublishedAssetAbsolutePath(relativePath, publicRoot);
+  if (!absolutePath) return false;
+  return cachedExists(absolutePath);
+}
+
 function buildScraperDbPublishedImagePath(opts: {
   srcPath: NullableString;
   imageFileName: NullableString;
@@ -232,7 +256,9 @@ function buildScraperDbPublishedImagePath(opts: {
 
   const src = String(opts.srcPath || '').trim().replace(/\\/g, '/').replace(/^[\\/]+/, '');
   if (!src || src.startsWith('gs://')) return null;
-  if (src.startsWith('auction-lots/')) return src;
+  if (src.startsWith('auction-lots/')) {
+    return publishedAssetExists(src) ? src : null;
+  }
 
   const category = (() => {
     const match = src.match(/^([^/]+)\/images\//);
@@ -485,7 +511,9 @@ export class ScraperDbClient {
       const estimateMin = row.estimate_min !== null && row.estimate_min !== undefined ? Number(row.estimate_min) : null;
       const estimateMax = row.estimate_max !== null && row.estimate_max !== undefined ? Number(row.estimate_max) : null;
 
-      const rawImagePath = (row.image_src_path || row.image_gcs_path || null) as string | null;
+      const srcImagePath = (row.image_src_path || null) as string | null;
+      const gcsImagePath = (row.image_gcs_path || null) as string | null;
+      const rawImagePath = (srcImagePath || gcsImagePath || null) as string | null;
       const publishedImagePath = buildScraperDbPublishedImagePath({
         srcPath: rawImagePath,
         imageFileName: row.image_filename || null,
@@ -493,7 +521,8 @@ export class ScraperDbClient {
         mediaRoot,
         categories,
       });
-      const imagePath = publishedImagePath || rawImagePath;
+      const imagePath = publishedImagePath
+        || (isPublishedAssetPath(srcImagePath) ? (gcsImagePath || null) : rawImagePath);
       return {
         lotUid: String(row.lot_uid),
         title: row.title || null,

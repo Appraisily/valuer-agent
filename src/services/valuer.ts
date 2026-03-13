@@ -622,11 +622,12 @@ export class ValuerService {
           image: thumbUrl,
           thumb: thumbUrl,
           imagePath: lot.imagePath,
+          imageFileName: lot.imageFileName,
         };
       });
 
       const missingLotUids = mappedLots
-        .filter((it) => !it.thumbUrl && it.lot_uid && it.imagePath)
+        .filter((it) => !it.thumbUrl && it.lot_uid && (it.imagePath || it.imageFileName))
         .map((it) => String(it.lot_uid));
 
       return { query: q, minPrice, maxPrice, mappedLots, missingLotUids };
