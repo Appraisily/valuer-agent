@@ -15,6 +15,7 @@ export interface FormattedAuctionItem extends Omit<SimplifiedAuctionItem, 'diff'
   diff: string; // Required string
   is_current: boolean; // Required boolean
   quality_score?: number; // Add quality score to output JSON
+  recency_weight?: number; // Recency weight applied (0-1), only present when time adjustment is active
 }
 
 export interface MarketDataResult {
@@ -126,6 +127,14 @@ export interface EnhancedStatistics {
   provenance_strength: number; // Provenance strength score (0-100)
   data_quality?: string; // Data quality indicator based on search results
   
+  // Time adjustment metadata
+  time_adjustment_applied: boolean;
+  time_adjustment_summary?: {
+    total_weighted: number;
+    avg_weight: number;
+    date_range: string;
+  };
+
   // Search keyword information
   search_keywords?: {
     very_specific: Array<{keyword: string, count: number}>;

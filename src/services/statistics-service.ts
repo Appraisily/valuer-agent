@@ -146,7 +146,30 @@ export class StatisticsService {
     );
 
     // 4. Calculate Core Statistics (using the consistent dataset)
-    const coreStats = this.statisticalAnalysisService.calculateCoreStatistics(validAnalysisData, value);
+    // Try time-adjusted statistics first (recency-weighted), fall back to unweighted
+    let coreStats = this.statisticalAnalysisService.calculateCoreStatistics(validAnalysisData, value);
+    let timeAdjustmentApplied = false;
+    let timeAdjustmentSummary: { total_weighted: number; avg_weight: number; date_range: string } | undefined;
+    let recencyWeightMap: Map<string, number> | undefined;
+
+    const timeAdjustedResult = this.statisticalAnalysisService.calculateTimeAdjustedStatistics(validAnalysisData, value);
+    if (timeAdjustedResult) {
+      coreStats = timeAdjustedResult.stats;
+      timeAdjustmentApplied = true;
+      timeAdjustmentSummary = timeAdjustedResult.summary;
+      console.log('Using time-adjusted (recency-weighted) statistics for core metrics');
+
+      // Build a lookup map for attaching weights to comparable sales output
+      const { applyRecencyWeights, DEFAULT_RECENCY_CONFIG } = await import('./utils/time-adjustment.js');
+      const weightedItems = applyRecencyWeights(validAnalysisData);
+      recencyWeightMap = new Map<string, number>();
+      for (const wi of weightedItems) {
+        const key = `${wi.item.title}|${wi.item.house}|${wi.item.date}|${wi.item.price}`;
+        recencyWeightMap.set(key, wi.weight);
+      }
+    } else {
+      console.log('Insufficient dated comparables — using unweighted statistics');
+    }
 
     // Handle cases with insufficient data for full stats
     if (validAnalysisData.length === 0) {
@@ -189,7 +212,7 @@ export class StatisticsService {
     // 7. Format Final Report Components
     const formattedPercentile = this.statisticalAnalysisService.getOrdinalSuffix(coreStats.target_percentile_raw);
     // Format comparables using the consistent data (limit applied later by server.ts)
-    const comparableSales = this.marketReportService.formatComparableSales(analysisData, value);
+    const comparableSales = this.marketReportService.formatComparableSales(analysisData, value, recencyWeightMap);
     // Use the actual count of gathered items for data quality assessment
     // Pass the auction results with quality scores
     const dataQuality = this.marketReportService.determineDataQuality(
@@ -226,6 +249,9 @@ export class StatisticsService {
         provenance_strength: additionalMetrics.provenance_strength,
         // Metadata
         data_quality: dataQuality,
+        // Time adjustment metadata
+        time_adjustment_applied: timeAdjustmentApplied,
+        time_adjustment_summary: timeAdjustmentSummary,
         // Include search keywords information
         search_keywords: {
           very_specific: very_specific.map(k => ({keyword: k.replace(/["]+/g, ''), count: keywordCounts.get(k) || 0})),
@@ -286,7 +312,7 @@ export class StatisticsService {
         price_max: priceMax,
         standard_deviation: 0, // Cannot calculate reliably
         coefficient_of_variation: 0, // Cannot calculate reliably
-        percentile: count > 0 ? 'N/A' : '50th', 
+        percentile: count > 0 ? 'N/A' : '50th',
         confidence_level: confidence,
         value: targetValue,
         price_trend_percentage: '+0.0%', // Cannot calculate trend reliably
@@ -298,6 +324,7 @@ export class StatisticsService {
         investment_potential: defaultAdditionalMetrics.investment_potential,
         provenance_strength: defaultAdditionalMetrics.provenance_strength,
         data_quality: defaultDataQuality,
+        time_adjustment_applied: false,
       };
       
       // Add keyword information if available

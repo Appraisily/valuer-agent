@@ -56,7 +56,7 @@ async function fetchWithRetry(
         if (typeof timeoutMs === 'number' && timeoutMs > 0) return timeoutMs;
         const envMs = Number(process.env.VALUER_HTTP_TIMEOUT_MS);
         if (!Number.isNaN(envMs) && envMs > 0) return envMs;
-        return 90_000; // default 90s without flags
+        return 180_000; // default 180s – batch searches with 15+ concurrent queries often exceed 90s
       })();
       const id = setTimeout(() => controller.abort(new Error('Request timed out')), effectiveTimeout);
       const res = await fetch(input, { ...init, signal: controller.signal });

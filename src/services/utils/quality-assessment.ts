@@ -103,20 +103,33 @@ export async function assessAuctionResultsQuality(
     itemKeyMap.set(key, index);
   });
   
-  // Prepare the data for the quality assessment
+  // Prepare the data for the quality assessment — include computed sale age for recency context
+  const currentYear = new Date().getFullYear();
   const inputData = {
     targetItem: {
       description: targetItemDescription,
       estimatedValue: targetValue
     },
-    auctionResults: resultsToAssess.map(item => ({
-      title: item.title,
-      price: item.price,
-      currency: item.currency,
-      house: item.house,
-      date: item.date,
-      description: item.description || ''
-    }))
+    auctionResults: resultsToAssess.map(item => {
+      let saleAgeYears: number | null = null;
+      if (item.date) {
+        try {
+          const saleYear = new Date(item.date).getFullYear();
+          if (!isNaN(saleYear)) {
+            saleAgeYears = currentYear - saleYear;
+          }
+        } catch { /* leave null */ }
+      }
+      return {
+        title: item.title,
+        price: item.price,
+        currency: item.currency,
+        house: item.house,
+        date: item.date,
+        saleAgeYears,
+        description: item.description || ''
+      };
+    })
   };
 
   // Create the prompt for quality assessment
@@ -126,7 +139,7 @@ I need to assess how relevant each of these auction results is for valuing the t
 TARGET ITEM:
 "${targetItemDescription}" with an estimated value of ${targetValue}.
 
-AUCTION RESULTS:
+AUCTION RESULTS (saleAgeYears = years since the sale):
 ${JSON.stringify(inputData.auctionResults, null, 2)}
 
 For each auction result, provide a quality score (0-100) indicating how relevant/similar it is to the target item.
@@ -135,7 +148,7 @@ Higher scores mean the item is more comparable to the target item and more usefu
 Consider these factors:
 - Similarity in artist, medium, size, subject matter, period, condition, etc.
 - How well it matches the key attributes of the target item
-- Recency of the auction sale
+- Recency of the auction sale — give moderately lower scores to sales older than 5 years unless they are the only available comparables for a rare item
 - Reliability of the auction house
 
 Return ONLY a valid JSON object with a "results" array where each object has:
