@@ -1,11 +1,11 @@
-### Multi-search endpoint and single-browser/multi-tab workflow (valuer-agent + valuer)
+### Historical: Multi-search endpoint and single-browser/multi-tab workflow (Valuer Bridge + valuer)
 
-Note: In current production deployment, valuer-agent requires caller-provided `terms[]` and does not generate search terms. The design below documents the generic capability and historical approach; upstream services (e.g., appraisals-web-services) now own term generation and tiering.
+Note: This is a historical implementation plan, not the current runtime contract. Current Valuer Bridge is DB-only, requires caller-provided `terms[]`, and does not generate search terms or call the live `valuer`/Invaluable path. The repo path remains `repos/services/valuer-agent` for source-control continuity; runtime-facing names should use `valuer-bridge`, with `valuer-agent` only as a temporary compatibility alias. Upstream services (e.g., appraisals-web-services) own term generation and tiering.
 
 This document proposes a minimal-change implementation to reduce request bursts and browser churn by introducing:
 
 - A batch/multi-search endpoint on `valuer` that executes multiple queries using a single browser instance with multiple tabs and bounded concurrency.
-- A corresponding `valuer-agent` endpoint that generates N candidate search terms and delegates to `valuer` in one call.
+- A corresponding Valuer Bridge endpoint that generates N candidate search terms and delegates to `valuer` in one call.
 
 The goal is to prevent overloading upstream sites and eliminate errors observed in logs such as “Navigating frame was detached”, “Protocol error: Connection closed”, and `net::ERR_ABORTED`, which are consistent with concurrent reuse of a single tab and repeated browser lifecycles.
 
@@ -23,7 +23,7 @@ The goal is to prevent overloading upstream sites and eliminate errors observed 
 
 - **Single browser, multi-tab:** Reuse the existing `BrowserManager` (already supports multiple pages via `createTab(name)`) to run several searches concurrently with a configurable concurrency limit. One tab per search query, unique tab names.
 - **Batch endpoint on valuer:** Add `POST /api/search/batch` that accepts an array of query parameter objects and optional cookies/settings. The route initializes one `InvaluableScraper`, fans out searches with a concurrency limiter, and aggregates standardized results.
-- **Multi-search endpoint on valuer-agent:** Add `POST /api/multi-search`. The agent generates K candidate queries (configurable) using existing `keyword-extraction` utilities, then calls `valuer`’s batch endpoint once. The agent merges and ranks results for downstream consumers.
+- **Multi-search endpoint on Valuer Bridge:** Add `POST /api/multi-search`. The bridge generates K candidate queries (configurable) using existing `keyword-extraction` utilities, then calls `valuer`’s batch endpoint once. The bridge merges and ranks results for downstream consumers.
 - **Back-pressure:** Concurrency limited by config (e.g., 2–4 tabs), with a simple in-process queue. Each request within a batch gets a unique tab name and isolated interception.
 - **Cookie reuse:** Capture updated cookies from the first successful search and reuse them for subsequent tabs in the same batch.
 
@@ -81,7 +81,7 @@ Notes:
 - Preserve the existing `GET /api/search` behavior unchanged for backward compatibility.
 - Each individual search inside the batch is formatted using the same `formatSearchResults` and `standardizeResponse` logic already present in `valuer/src/routes/search.js`.
 
-### valuer-agent: Multi-search endpoint
+### Valuer Bridge: Multi-search endpoint
 
 - Route: `POST /api/multi-search`
 - Body:
@@ -177,7 +177,7 @@ All secrets stay in Secret Manager; no `.env` in production.
 
 ---
 
-## valuer-agent implementation details
+## Valuer Bridge implementation details
 
 Key files to minimally extend:
 - `valuer-agent/src/services/keyword-extraction.service.ts`
@@ -221,8 +221,8 @@ Runtime vars:
 
 1) Implement valuer batch route and unique-tab search support; keep existing endpoints intact.
 2) Deploy `valuer` and verify health (`/` and `/api/search`); smoke-test `/api/search/batch` with 2–3 queries.
-3) Implement `valuer-agent /api/multi-search`; point to the batch endpoint; deploy.
-4) Update upstream caller(s) to use `valuer-agent /api/multi-search` instead of issuing multiple `valuer /api/search` calls.
+3) Implement Valuer Bridge `/api/multi-search`; point to the batch endpoint; deploy.
+4) Update upstream caller(s) to use Valuer Bridge `/api/multi-search` instead of issuing multiple `valuer /api/search` calls.
 
 ---
 
@@ -244,5 +244,3 @@ Runtime vars:
 - `valuer-agent/src/server.ts`: add `POST /api/multi-search`; orchestrate candidate term generation and invoke `valuer` batch endpoint once; return merged results.
 
 This plan follows the minimal-change principle and keeps a single source of truth for result formatting within `valuer`.
-
-

@@ -1,87 +1,14 @@
 import { ValuerResponse, ValuerLot } from './types.js';
-import { ScraperDbClient, buildPublicAssetUrl } from './scraper-db.js';
+import { ScraperDbClient, buildLotImageAssetContract } from './scraper-db.js';
 
-// Helper to detect Cloud Run/metadata server availability for ID token fetching
-async function fetchIdentityToken(audienceUrl: string): Promise<string | null> {
-  // Prefer explicitly provided token (useful for local dev or CI)
-  if (process.env.VALUER_ID_TOKEN && process.env.VALUER_ID_TOKEN.trim().length > 0) {
-    return process.env.VALUER_ID_TOKEN.trim();
-  }
-
-  // Attempt to fetch from GCP metadata server when running on Cloud Run/GCE/GKE
-  try {
-    const metadataUrl = `http://metadata/computeMetadata/v1/instance/service-accounts/default/identity?audience=${encodeURIComponent(audienceUrl)}&format=full`;
-    const res = await fetch(metadataUrl, { headers: { 'Metadata-Flavor': 'Google' } as any });
-    if (res.ok) {
-      const token = await res.text();
-      return token || null;
-    }
-  } catch (_err) {
-    // Ignore – not in GCP environment or metadata server not reachable
-  }
-  return null;
-}
-
-type RetryableStatus = 429 | 502 | 503 | 504;
-
-interface RetryConfig {
-  attempts: number;
-  baseDelayMs: number;
-  maxDelayMs: number;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-async function fetchWithRetry(
-  input: string,
-  init: RequestInit,
-  retry?: Partial<RetryConfig>,
-  timeoutMs?: number,
-): Promise<Response> {
-  const cfg: RetryConfig = {
-    // Built-in sane defaults prefer code defaults over envs to avoid flags
-    attempts: Math.max(1, Number(retry?.attempts ?? process.env.VALUER_RETRY_ATTEMPTS ?? 2)),
-    baseDelayMs: Math.max(100, Number(retry?.baseDelayMs ?? process.env.VALUER_RETRY_BASE_MS ?? 500)),
-    maxDelayMs: Math.max(500, Number(retry?.maxDelayMs ?? process.env.VALUER_RETRY_MAX_MS ?? 3000)),
+type SearchOptions = {
+  timeoutMs?: number;
+  retry?: {
+    attempts?: number;
+    baseDelayMs?: number;
+    maxDelayMs?: number;
   };
-
-  let lastError: any;
-  for (let attempt = 1; attempt <= cfg.attempts; attempt++) {
-    try {
-      // Apply per-request timeout via AbortController
-      const controller = new AbortController();
-      const effectiveTimeout = (() => {
-        if (typeof timeoutMs === 'number' && timeoutMs > 0) return timeoutMs;
-        const envMs = Number(process.env.VALUER_HTTP_TIMEOUT_MS);
-        if (!Number.isNaN(envMs) && envMs > 0) return envMs;
-        return 90_000; // default 90s without flags
-      })();
-      const id = setTimeout(() => controller.abort(new Error('Request timed out')), effectiveTimeout);
-      const res = await fetch(input, { ...init, signal: controller.signal });
-      clearTimeout(id);
-      if (res.ok) return res;
-      const status = res.status as RetryableStatus | number;
-      // Retry only on transient statuses
-      if (status === 429 || status === 502 || status === 503 || status === 504) {
-        lastError = new Error(`HTTP ${status}`);
-      } else {
-        return res; // non-retryable
-      }
-    } catch (err: any) {
-      // Network-level errors: retry
-      lastError = err;
-    }
-
-    if (attempt < cfg.attempts) {
-      const jitter = Math.random() * 0.25 + 0.75; // 0.75x - 1x
-      const delay = Math.min(cfg.maxDelayMs, Math.floor(cfg.baseDelayMs * Math.pow(2, attempt - 1) * jitter));
-      await sleep(delay);
-    }
-  }
-  throw lastError instanceof Error ? lastError : new Error(String(lastError));
-}
+};
 
 // Define the structure for a transformed hit
 interface ValuerHit {
@@ -117,12 +44,7 @@ function transformValuerLotToHit(lot: ValuerLot): ValuerHit {
 }
 
 export class ValuerService {
-  private baseUrl: string;
-
-  private audienceOrigin: string;
-  private cachedAuthHeader: { Authorization: string } | null = null;
-  private authEnabled: boolean;
-  private scraperDb: ScraperDbClient | null = null;
+  private scraperDb: ScraperDbClient;
 
   private async publishLotThumbs(lotUids: string[]): Promise<Map<string, { thumbUrl: string | null; srcPath: string | null }>> {
     const publishUrl = String(process.env.SCRAPPER_THUMBS_PUBLISH_URL || 'http://scrapper:8080/api/lot-thumbs/publish').trim();
@@ -162,12 +84,16 @@ export class ValuerService {
           'content-type': 'application/json',
           'x-api-key': apiKey,
         } as any,
-        body: JSON.stringify({ lotUids: unique, limit: unique.length }),
+        body: JSON.stringify({
+          lotUids: unique,
+          limit: unique.length,
+          maxConcurrency: Math.max(1, Math.min(2, Number(process.env.SCRAPPER_THUMBS_PUBLISH_CONCURRENCY || 1) || 1)),
+        }),
         signal: controller.signal,
       });
       if (!res.ok) {
         const text = await res.text().catch(() => '');
-        console.warn(`[valuer-agent] Thumb publish failed (${res.status}): ${text.slice(0, 300)}`);
+        console.warn(`[valuer-bridge] Thumb publish failed (${res.status}): ${text.slice(0, 300)}`);
         return new Map();
       }
       const json: any = await res.json().catch(() => null);
@@ -183,7 +109,7 @@ export class ValuerService {
       }
       return out;
     } catch (err: any) {
-      console.warn(`[valuer-agent] Thumb publish request error: ${err?.message || err}`);
+      console.warn(`[valuer-bridge] Thumb publish request error: ${err?.message || err}`);
       return new Map();
     } finally {
       clearTimeout(id);
@@ -191,53 +117,15 @@ export class ValuerService {
   }
 
   constructor() {
-    const envBase = process.env.VALUER_BASE_URL || 'http://valuer:8080/api/search';
-    this.baseUrl = envBase.replace(/\/?$/, '');
-    const parsed = new URL(this.baseUrl);
-    this.audienceOrigin = `${parsed.protocol}//${parsed.host}`;
-    const hostname = parsed.hostname.toLowerCase();
-    const isLocalHost = ['localhost', '127.0.0.1', 'valuer', 'valuer-dev', 'host.docker.internal'].includes(hostname);
-    const disableAuth = String(process.env.VALUER_AUTH_DISABLED ?? (isLocalHost ? 'true' : 'false')).toLowerCase() === 'true';
-    this.authEnabled = !disableAuth;
-  }
-
-  private resolveProvider(): 'live' | 'scraper_db' | 'auto' {
-    const explicit = process.env.VALUER_PROVIDER || process.env.VALUER_DATA_PROVIDER;
-    const raw = String(explicit || '').toLowerCase().trim();
-    if (!raw) {
-      return process.env.SCRAPER_DB_URL ? 'scraper_db' : 'auto';
-    }
-    if (raw === 'scraper' || raw === 'scraperdb' || raw === 'scraper_db' || raw === 'db') return 'scraper_db';
-    if (raw === 'auto') return 'auto';
-    return 'live';
-  }
-
-  private getScraperDb(): ScraperDbClient {
-    if (this.scraperDb) return this.scraperDb;
     this.scraperDb = new ScraperDbClient();
-    return this.scraperDb;
   }
 
-  /**
-   * Build Invaluable cookie objects from env when available.
-   * Supports multiple env names to ease deployment.
-   */
-  private getInvaluableCookies(): Array<{ name: string; value: string; domain?: string; path?: string }> {
-    try {
-      // Allow passing full cookies JSON via VALUER_COOKIES or INVALUABLE_COOKIES
-      const raw = process.env.VALUER_COOKIES || process.env.INVALUABLE_COOKIES;
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed as Array<{ name: string; value: string; domain?: string; path?: string }>;
-      }
-    } catch (_) {}
+  getReadiness(): { provider: 'scraper_db'; dbConfigured: boolean } {
+    return { provider: 'scraper_db', dbConfigured: true };
+  }
 
-    const az = process.env.INVALUABLE_AZTOKEN_PROD || process.env.AZTOKEN_PROD || process.env.INVALUABLE_ACT_TOKEN || '';
-    const cf = process.env.INVALUABLE_CF_CLEARANCE || process.env.CF_CLEARANCE || '';
-    const cookies: Array<{ name: string; value: string; domain?: string; path?: string }> = [];
-    if (az) cookies.push({ name: 'AZTOKEN-PROD', value: az, domain: '.invaluable.com', path: '/' });
-    if (cf) cookies.push({ name: 'cf_clearance', value: cf, domain: '.invaluable.com', path: '/' });
-    return cookies;
+  async close(): Promise<void> {
+    await this.scraperDb.close();
   }
 
   /**
@@ -246,7 +134,7 @@ export class ValuerService {
    */
   async multiSearch(
     inputs: Array<{ query: string; minPrice?: number; maxPrice?: number; limit?: number }>,
-    options?: { timeoutMs?: number; retry?: Partial<RetryConfig> }
+    _options?: SearchOptions
   ): Promise<Array<{ query: string; hits: ValuerHit[] }>> {
     const body: any = {
       searches: inputs.map((q) => {
@@ -264,7 +152,7 @@ export class ValuerService {
       concurrency: Math.max(1, Number(process.env.VALUER_BATCH_CONCURRENCY || 3)),
     };
 
-    const res = await this.batchSearch(body, options);
+    const res = await this.batchSearch(body);
     const results: Array<{ query: string; hits: ValuerHit[] }> = [];
     const arr = Array.isArray(res?.searches) ? res.searches : [];
 
@@ -297,128 +185,54 @@ export class ValuerService {
     return results;
   }
 
-  private async getAuthHeader(): Promise<Record<string, string>> {
-    // If explicitly disabled, skip auth header
-    if (!this.authEnabled || process.env.VALUER_AUTH_DISABLED === 'true') {
-      return {};
-    }
-
-    // Cache token for the process lifetime to avoid repeated metadata calls
-    if (this.cachedAuthHeader) {
-      return this.cachedAuthHeader;
-    }
-
-    const token = await fetchIdentityToken(this.audienceOrigin);
-    if (token) {
-      this.cachedAuthHeader = { Authorization: `Bearer ${token}` };
-      return this.cachedAuthHeader;
-    }
-    // No token available; return empty headers (works if the service allows unauthenticated)
-    return {};
-  }
-
   /**
-   * Core search function to fetch results from the Valuer API.
-   * Focuses on executing a single search request.
+   * Core search function backed by the local scraper DB.
    * @param query Search query string
    * @param minPrice Optional minimum price filter
    * @param maxPrice Optional maximum price filter
-   * @param limit Optional limit for the number of results from the API
+   * @param limit Optional limit for the number of DB results
    * @returns Promise with the raw search results (hits)
    */
-  async search(query: string, minPrice?: number, maxPrice?: number, limit?: number, options?: { timeoutMs?: number; retry?: Partial<RetryConfig> }): Promise<ValuerSearchResponse> {
-    const params = new URLSearchParams({
-      query,
-      ...(limit !== undefined && { 'limit': limit.toString() })
-    });
-    if (minPrice !== undefined || maxPrice !== undefined) {
-      if (minPrice !== undefined) params.append('priceResult[min]', minPrice.toString());
-      if (maxPrice !== undefined) params.append('priceResult[max]', maxPrice.toString());
-    }
+  async search(query: string, minPrice?: number, maxPrice?: number, limit?: number, _options?: SearchOptions): Promise<ValuerSearchResponse> {
+    const lots = await this.scraperDb.searchLots({ query, minPrice, maxPrice, limit });
+    const hits = lots
+      .map((lot) => transformValuerLotToHit({
+        title: lot.title || '',
+        description: lot.description || '',
+        auctionHouse: lot.houseName || '',
+        date: lot.auctionDate || '',
+        price: {
+          amount: lot.priceRealised || 0,
+          currency: lot.currency || 'USD',
+          symbol: lot.currencySymbol || '$',
+        },
+        lotNumber: lot.lotNumber || '',
+        saleType: lot.saleType || '',
+      } as ValuerLot))
+      .filter((hit) => Boolean(hit.lotTitle && hit.priceResult));
 
-    // Add sorting by relevance
-    params.append('sort', 'relevance');
-
-    // If cookies are available via env, pass them along in the query for GET endpoint
-    try {
-      const cookies = this.getInvaluableCookies();
-      if (cookies.length > 0) {
-        params.append('cookies', JSON.stringify(cookies));
-      }
-    } catch (_) {}
-
-    const url = `${this.baseUrl}?${params}`;
-    console.log(`Executing valuer search: ${url}`);
-    const authHeader = await this.getAuthHeader();
-    const response = await fetchWithRetry(url, { headers: { ...authHeader } as any }, options?.retry, options?.timeoutMs);
-
-    if (!response.ok) {
-      const errorBody = await response.text();
-      console.error('Valuer service error:', errorBody);
-      throw new Error(`Failed to fetch from Valuer service: ${response.statusText}`);
-    }
-
-    const data = await response.json() as ValuerResponse;
-    const lots = Array.isArray(data?.data?.lots) ? data.data.lots : [];
-
-    // Use the helper function for transformation
-    const hits = lots.map(transformValuerLotToHit);
-
-    console.log(`Valuer service raw response for query "${query}" (found ${hits.length} hits):
+    console.log(`Valuer Bridge DB response for query "${query}" (found ${hits.length} hits):
       First 10 titles: ${hits.slice(0, 10).map(h => h.lotTitle).join(', ')}`);
 
     if (hits.length === 0) {
       console.log('No results found for query:', query);
-      // console.log('Raw response:', JSON.stringify(data, null, 2)); // Optionally log full raw response on no results
     }
 
     return { hits };
   }
 
   /**
-   * Finds valuable auction results for a given keyword, potentially refining the search.
-   * Handles retrying with a simpler keyword if initial results are insufficient.
+   * Finds valuable auction results for a given keyword.
    * @param keyword User search keyword
    * @param minPrice Minimum price to filter results (default: 1000)
-   * @param limit Maximum number of results to return *after* merging and sorting (default: 10)
+   * @param limit Maximum number of results to return after sorting (default: 10)
    * @returns Promise with auction results matching the criteria, sorted and limited.
    */
-  async findValuableResults(keyword: string, minPrice: number = 1000, limit: number = 10, options?: { timeoutMs?: number; retry?: Partial<RetryConfig> }): Promise<ValuerSearchResponse> {
-    // Initial search with the original keyword and a potentially larger internal limit
-    // Fetch more initially (e.g., limit * 2) to allow for better merging/filtering later
+  async findValuableResults(keyword: string, minPrice: number = 1000, limit: number = 10, options?: SearchOptions): Promise<ValuerSearchResponse> {
     const initialLimit = limit * 2;
     const results = await this.search(keyword, minPrice, undefined, initialLimit, options);
     const allHits = [...results.hits];
-    const seenTitles = new Set(allHits.map(hit => hit.lotTitle));
 
-    // If not enough results, try with a more focused search by removing some words
-    if (allHits.length < limit) {
-      const keywords = keyword.split(' ');
-      if (keywords.length > 1) {
-        const significantKeywords = keywords
-          .filter(word => !['antique', 'vintage', 'old', 'the', 'a', 'an'].includes(word.toLowerCase()))
-          .slice(0, 3) // Use up to 3 significant keywords
-          .join(' ');
-
-        if (significantKeywords && significantKeywords !== keyword) {
-          console.log(`Initial search for "${keyword}" yielded ${allHits.length} results (less than limit ${limit}). Retrying with "${significantKeywords}"`);
-          // Fetch remaining needed results with the refined query
-          const remainingLimit = initialLimit - allHits.length;
-          const additionalResults = await this.search(significantKeywords, minPrice, undefined, remainingLimit > 0 ? remainingLimit : undefined, options);
-
-          // Merge results, removing duplicates by title
-          additionalResults.hits.forEach(hit => {
-            if (!seenTitles.has(hit.lotTitle)) {
-              allHits.push(hit);
-              seenTitles.add(hit.lotTitle);
-            }
-          });
-          console.log(`Found ${additionalResults.hits.length} additional results. Total unique hits: ${allHits.length}`);
-        }
-      }
-    }
-
-    // Sort all collected hits by price (highest first) and apply the final limit
     allHits.sort((a, b) => b.priceResult - a.priceResult);
     const finalHits = allHits.slice(0, limit);
 
@@ -433,7 +247,7 @@ export class ValuerService {
    * @param targetValue Optional target value to define price range
    * @returns Promise with auction results within the price range.
    */
-  async findSimilarItems(description: string, targetValue?: number, options?: { timeoutMs?: number; retry?: Partial<RetryConfig> }): Promise<ValuerSearchResponse> {
+  async findSimilarItems(description: string, targetValue?: number, options?: SearchOptions): Promise<ValuerSearchResponse> {
     if (!targetValue) {
       // If no target value, just search with a default limit
       return this.search(description, undefined, undefined, 20, options);
@@ -455,84 +269,21 @@ export class ValuerService {
   }
 
   /**
-   * Calls the Valuer batch endpoint to run multiple searches in one request.
+   * Runs multiple DB-backed searches in one request-shaped call.
    */
   async batchSearch(body: {
     searches: Array<Record<string, any>>,
-    cookies?: Array<Record<string, any>>,
     fetchAllPages?: boolean,
     maxPages?: number,
     concurrency?: number,
     saveToGcs?: boolean,
     skipThumbPublish?: boolean,
-  }, options?: { timeoutMs?: number; retry?: Partial<RetryConfig> }): Promise<any> {
-    const provider = this.resolveProvider();
-    if (provider === 'scraper_db') {
-      return this.batchSearchScraperDb(body);
-    }
-    if (provider === 'auto') {
-      try {
-        const res = await this.batchSearchScraperDb(body);
-        const minLots = (() => {
-          const v = Number(process.env.SCRAPER_DB_AUTO_MIN_LOTS);
-          if (Number.isFinite(v) && v >= 0) return Math.floor(v);
-          return 5;
-        })();
-        const searches = Array.isArray(res?.searches) ? res.searches : [];
-        const totalLots = searches.reduce((sum: number, s: any) => {
-          const n = Array.isArray(s?.result?.data?.lots) ? s.result.data.lots.length : 0;
-          return sum + n;
-        }, 0);
-        const minTotalLots = Math.max(minLots, minLots * Math.min(2, searches.length || 1));
-        const tooSparse = totalLots < minTotalLots;
-        if (!tooSparse) return res;
-        console.warn(`[valuer-agent] SCRAPER_DB auto-mode: sparse results (totalLots=${totalLots}, minTotalLots=${minTotalLots}); falling back to live provider`);
-      } catch (err: any) {
-        console.warn(`[valuer-agent] SCRAPER_DB auto-mode failed; falling back to live provider: ${err?.message || err}`);
-      }
-    }
-    return this.batchSearchLive(body, options);
-  }
-
-  private async batchSearchLive(body: {
-    searches: Array<Record<string, any>>,
-    cookies?: Array<Record<string, any>>,
-    fetchAllPages?: boolean,
-    maxPages?: number,
-    concurrency?: number,
-    saveToGcs?: boolean,
-    skipThumbPublish?: boolean,
-  }, options?: { timeoutMs?: number; retry?: Partial<RetryConfig> }): Promise<any> {
-    const url = `${this.baseUrl}/batch`;
-    // Provide cookies from env if not supplied by caller
-    try {
-      if (!Array.isArray(body.cookies) || body.cookies.length === 0) {
-        const cookies = this.getInvaluableCookies();
-        if (cookies.length > 0) {
-          (body as any).cookies = cookies;
-        }
-      }
-    } catch (_) {}
-    console.log(`Executing valuer batch: ${url}`);
-    const authHeader = await this.getAuthHeader();
-    const t0 = Date.now();
-    const response = await fetchWithRetry(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...authHeader } as any,
-      body: JSON.stringify(body)
-    }, options?.retry, options?.timeoutMs);
-    try { console.log(`Valuer batch HTTP completed in ${Date.now() - t0}ms`); } catch {}
-    if (!response.ok) {
-      const text = await response.text();
-      console.error('Valuer batch error:', text);
-      throw new Error(`Failed to fetch from Valuer service: ${response.statusText}`);
-    }
-    return response.json();
+  }, _options?: SearchOptions): Promise<any> {
+    return this.batchSearchScraperDb(body);
   }
 
   private async batchSearchScraperDb(body: { searches: Array<Record<string, any>>; concurrency?: number; skipThumbPublish?: boolean }): Promise<any> {
     const searches = Array.isArray(body?.searches) ? body.searches : [];
-    const db = this.getScraperDb();
     const startedAt = new Date().toISOString();
 
     const skipThumbPublish = (() => {
@@ -584,10 +335,10 @@ export class ValuerService {
       const minPrice = coerceNumber(s?.priceResult?.min);
       const maxPrice = coerceNumber(s?.priceResult?.max);
       const limit = coerceNumber(s?.limit);
-      const lots = await db.searchLots({ query: q, minPrice, maxPrice, limit });
+      const lots = await this.scraperDb.searchLots({ query: q, minPrice, maxPrice, limit });
 
       const mappedLots: Array<Record<string, any>> = lots.map((lot) => {
-        const thumbUrl = buildPublicAssetUrl(lot.imagePath);
+        const imageAssets = buildLotImageAssetContract(lot.imagePath);
         return {
           id: lot.lotUid,
           lot_uid: lot.lotUid,
@@ -617,16 +368,23 @@ export class ValuerService {
           url: lot.sourceUrl,
           lotUrl: lot.sourceUrl,
           sourceUrl: lot.sourceUrl,
-          thumbUrl,
-          thumbnail: thumbUrl,
-          image: thumbUrl,
-          thumb: thumbUrl,
-          imagePath: lot.imagePath,
+          thumbUrl: imageAssets.thumbUrl,
+          thumbnail: imageAssets.thumbUrl,
+          imageUrl: imageAssets.imageUrl,
+          image: imageAssets.imageUrl || imageAssets.thumbUrl,
+          thumb: imageAssets.thumbUrl,
+          originalUrl: imageAssets.originalUrl,
+          imageOriginalUrl: imageAssets.imageOriginalUrl,
+          imagePath: imageAssets.imagePath,
+          thumbPath: imageAssets.thumbPath,
+          mediumPath: imageAssets.mediumPath,
+          originalPath: imageAssets.originalPath,
+          imageFileName: lot.imageFileName,
         };
       });
 
       const missingLotUids = mappedLots
-        .filter((it) => !it.thumbUrl && it.lot_uid && it.imagePath)
+        .filter((it) => !it.thumbUrl && it.lot_uid && (it.imagePath || it.imageFileName))
         .map((it) => String(it.lot_uid));
 
       return { query: q, minPrice, maxPrice, mappedLots, missingLotUids };
@@ -662,11 +420,18 @@ export class ValuerService {
           if (!lotUid) continue;
           const published = publishedThumbs.get(lotUid);
           if (!published || !published.thumbUrl) continue;
-          lot.thumbUrl = published.thumbUrl;
-          lot.thumbnail = published.thumbUrl;
-          lot.image = published.thumbUrl;
-          lot.thumb = published.thumbUrl;
-          if (published.srcPath) lot.imagePath = published.srcPath;
+          const imageAssets = buildLotImageAssetContract(published.srcPath);
+          lot.thumbUrl = imageAssets.thumbUrl || published.thumbUrl;
+          lot.thumbnail = lot.thumbUrl;
+          lot.imageUrl = imageAssets.imageUrl || lot.thumbUrl;
+          lot.image = lot.imageUrl || lot.thumbUrl;
+          lot.thumb = lot.thumbUrl;
+          lot.originalUrl = imageAssets.originalUrl || lot.imageUrl || lot.thumbUrl;
+          lot.imageOriginalUrl = imageAssets.imageOriginalUrl || lot.originalUrl;
+          if (imageAssets.imagePath) lot.imagePath = imageAssets.imagePath;
+          if (imageAssets.thumbPath) lot.thumbPath = imageAssets.thumbPath;
+          if (imageAssets.mediumPath) lot.mediumPath = imageAssets.mediumPath;
+          if (imageAssets.originalPath) lot.originalPath = imageAssets.originalPath;
         }
 
         const response: ValuerResponse = {
@@ -687,14 +452,14 @@ export class ValuerService {
 
         return { query: q, result: response };
       }
-      const fallbackQuery = String(searches[idx]?.query || '').trim();
+      const failedQuery = String(searches[idx]?.query || '').trim();
       return {
-        query: fallbackQuery,
+        query: failedQuery,
         error: String(settled.reason?.message || settled.reason || 'scraper_db_error'),
         result: {
           success: false,
           timestamp: startedAt,
-          parameters: { query: fallbackQuery },
+          parameters: { query: failedQuery },
           data: { lots: [], totalResults: 0 },
         },
       };

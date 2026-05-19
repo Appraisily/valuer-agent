@@ -18,7 +18,7 @@ try {
   bucket = storage.bucket(DEFAULT_BUCKET);
 } catch (err) {
   bucket = null;
-  console.warn('[valuer-agent] Local storage disabled:', (err as Error)?.message ?? err);
+  console.warn('[valuer-bridge] Local storage disabled:', (err as Error)?.message ?? err);
 }
 
 export const storageEnabled = bucket !== null;

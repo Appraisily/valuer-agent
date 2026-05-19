@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { beforeEach, describe, it, expect, vi } from 'vitest';
 import { JustifierAgent } from '../services/justifier-agent.js';
 import { ValuerService } from '../services/valuer.js';
 import OpenAI from 'openai';
@@ -25,13 +25,22 @@ describe('JustifierAgent', () => {
   // Create properly typed mock functions
   const mockFindSimilarItems = vi.fn<[string, number], Promise<ValuerSearchResponse>>();
   const mockSearch = vi.fn<[string, number | undefined, number | undefined], Promise<ValuerSearchResponse>>();
+  const mockMultiSearch = vi.fn<[
+    Array<{ query: string; minPrice?: number; maxPrice?: number; limit?: number }>
+  ], Promise<Array<{ query: string; hits: ValuerSearchResponse['hits'] }>>>();
 
   const mockValuerService = {
     findSimilarItems: mockFindSimilarItems,
-    search: mockSearch
+    search: mockSearch,
+    multiSearch: mockMultiSearch
   } as unknown as ValuerService;
 
   const agent = new JustifierAgent(mockOpenAI as unknown as OpenAI, mockValuerService);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockMultiSearch.mockResolvedValue([{ query: 'test item', hits: [] }]);
+  });
 
   describe('findValue', () => {
     it('should return a value and explanation', async () => {

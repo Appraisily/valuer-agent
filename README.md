@@ -1,16 +1,19 @@
-# Valuer Agent Backend
+# Valuer Bridge Backend
 
-A Node.js/Express backend service for antique and collectible item valuation and analysis, leveraging OpenAI language models and auction database integration.
+A Node.js/Express backend service for antique and collectible item valuation and analysis, leveraging OpenAI language models and Appraisily's scraper database.
+
+Naming note: the canonical product/ops name is **Valuer Bridge** because this service is a bridge/tool API for auction data access, not a Codex agent. The repo path remains `repos/services/valuer-agent` for source-control continuity. Runtime-facing names should use `valuer-bridge`; `valuer-agent` is a temporary compatibility alias only.
 
 ## Overview
 
-The Valuer Agent Backend provides API endpoints for item valuation, price justification, value range analysis, auction result searches, and enhanced statistical analysis for antiques and collectibles. It connects to an auction database service and uses AI models to analyze and interpret market data.
+The Valuer Bridge Backend provides API endpoints for item valuation, price justification, value range analysis, auction result searches, and enhanced statistical analysis for antiques and collectibles. Search requests always read from Appraisily's scraper database through `ScraperDbClient`; there is no live provider mode, provider auto-selection, cookie-backed scraping path, or direct upstream Valuer fallback.
 
 ## Core Technologies
 
 - **Node.js/Express**: Backend framework
 - **TypeScript**: Type-safe JavaScript
 - **OpenAI API**: For AI-powered valuation and analysis
+- **Postgres scraper DB**: Required source for auction lots
 - **RabbitMQ**: Internal messaging and audit event fan-out
 - **Local filesystem storage**: Archives request/response payloads for debugging
 - **Docker**: For containerization and deployment
@@ -39,16 +42,16 @@ npm start
 - Run `npm run env:check` (delegates to `repos/env-governance/schemas/services/valuer-agent.json`) before `npm run dev`, `npm run build`, or deployment.
 - Required:
   - `OPENAI_API_KEY` – the service refuses to start without an AI key.
+  - `SCRAPER_DB_URL` or `SCRAPER_DATABASE_URL` – Postgres connection string for the scraper database.
 - Optional but commonly configured:
-  - **Valuer backend** – `VALUER_BASE_URL`, `VALUER_ID_TOKEN`, `VALUER_AUTH_DISABLED`.
-  - **Scraper DB provider** – `VALUER_PROVIDER=live|scraper_db|auto`, `SCRAPER_DB_URL` (Postgres connection string to the `scraper` DB), optional `PUBLIC_ASSETS_BASE_URL` (defaults to `https://assets.appraisily.com` for lot thumbnails).
+  - **Scraper DB tuning** – `SCRAPER_DB_POOL_SIZE`, `SCRAPER_DB_QUERY_TIMEOUT_MS`, `SCRAPER_DB_CONCURRENCY`, `SCRAPER_DB_SSL`, optional `PUBLIC_ASSETS_BASE_URL` (defaults to `https://assets.appraisily.com` for lot thumbnails).
   - **Messaging** – `MESSAGE_TRANSPORT`/`MESSAGE_BROKER_URL`/`MESSAGE_EXCHANGE`/`MESSAGE_ROUTING_KEY` (set `MESSAGE_TRANSPORT=none` to disable fan-out).
   - **Archiving** – `VALUER_ARCHIVE_RESPONSES`, `VALUER_ARCHIVE_PREFIX`, local storage knobs (`LOCAL_STORAGE_ROOT`, `LOCAL_STORAGE_BUCKET`, `LOCAL_STORAGE_BASE_URL`).
-  - **Timeouts & retries** – `VALUER_HTTP_TIMEOUT_MS`, `VALUER_RETRY_ATTEMPTS`, `VALUER_RETRY_BASE_MS`, `VALUER_RETRY_MAX_MS`, `VALUER_BATCH_CONCURRENCY`, `VALUER_BATCH_HTTP_TIMEOUT_MS`.
-  - **Invaluable session helpers** – `VALUER_COOKIES`, `INVALUABLE_COOKIES`, `INVALUABLE_AZTOKEN_PROD`, `AZTOKEN_PROD`, `INVALUABLE_CF_CLEARANCE`, `CF_CLEARANCE`.
+  - **Batch controls** – `VALUER_BATCH_CONCURRENCY`, `VALUER_BATCH_HTTP_TIMEOUT_MS`, `VALUER_EARLY_STOP_AT`.
+  - **Thumbnail publishing** – `SCRAPPER_INTERNAL_API_KEY`, `SCRAPPER_THUMBS_PUBLISH_URL`, `SCRAPPER_THUMBS_PUBLISH_TIMEOUT_MS`, `SCRAPPER_THUMBS_PUBLISH_CONCURRENCY`, `SCRAPER_DB_PUBLISH_THUMBS_DISABLED`, `SCRAPER_DB_PUBLISH_THUMBS_LIMIT`.
   - **Miscellaneous** – `PORT`, `SAVE_VALUER_RESPONSES`, `PROVIDED_TIER_SPLIT`, `VALUER_JUSTIFY_*`, `VALUER_MIN_PRICE_DEFAULT`, etc.
 
-The schema captures every supported flag so env-check output stays authoritative.
+The schema captures every supported flag so env-check output stays authoritative. Do not add provider/cookie/live-scrape env flags back to this service.
 
 ## File Structure
 
@@ -79,7 +82,7 @@ The schema captures every supported flag so env-check output stays authoritative
 
 ### ValuerService
 
-The primary service for interfacing with the auction database API.
+The primary service for interfacing with the scraper database.
 
 **Key Methods:**
 - `search(query: string, minPrice?: number, maxPrice?: number, limit?: number)`: Searches auction database with filters
@@ -135,12 +138,13 @@ Justifies a valuation based on item description and proposed value.
 ```
 
 ### POST /api/multi-search (with justification)
-Performs concurrent term searches. When called with `justify:true` and a `targetValue`, it narrows the price band and returns a `summary` including `{ minValue, maxValue, mostLikelyValue, supportLevel?, comparableItems[] }`.
+Performs concurrent DB-backed term searches. When called with `justify:true` and a `targetValue`, it narrows the price band and returns a `summary` including `{ minValue, maxValue, mostLikelyValue, supportLevel?, comparableItems[] }`.
 
 Notes (current deployment behavior):
 - `terms` is required. This service does not generate search terms when `terms` is missing/empty. Upstream callers (e.g., web‑services) own term generation and grouping.
 - `description` may be an empty string when `terms` are provided — this is expected.
 - Concurrency is honored per batch (typically 3). There is no hard early‑stop by default; you can cap total unique lots with the request field `maxItems` or the env `VALUER_EARLY_STOP_AT` (> 0). If neither is set, the service will collect up to the natural maximum (e.g., queries × per‑query limit).
+- Results come from the scraper database only. The response includes `provider: "scraper_db"` on the lower-level batch envelope.
 
 Example request (preferred):
 ```json
@@ -441,22 +445,39 @@ interface ValueRangeResponse {
 ## Processing Flow
 
 1. **API Request Handling**: Express routes receive client requests and validate using Zod schemas
-2. **Secret Management**: OpenAI key fetched securely from Google Cloud Secret Manager
-3. **Keyword Extraction**: AI extracts optimal search keywords from item descriptions
-4. **Market Data Retrieval**: ValuerService fetches auction results based on keywords
+2. **Secret Management**: OpenAI and scraper DB credentials come from approved runtime stores
+3. **Keyword Ownership**: `/api/multi-search` and `/v2/search/batch` require caller-provided terms; upstream services own term planning
+4. **Market Data Retrieval**: `ValuerService` fetches auction results from the scraper DB only
 5. **Data Analysis**: 
    - JustifierAgent analyzes market data and generates value justifications
    - StatisticsService calculates comprehensive market statistics
 6. **Error Handling**: Structured error handling with appropriate HTTP status codes
 
+## Smoke Checks
+
+After deploying a new Valuer Bridge image, run:
+
+```bash
+npm run smoke
+```
+
+The smoke checks verify:
+- `/health` reports `service: "valuer-bridge"`, `provider: "scraper_db"`, and `dbConfigured: true`
+- `/v2/search/batch` returns at least one scraper DB lot
+- `/api/multi-search` still works as the flat-term compatibility endpoint
+- `/api/multi-search` rejects missing `terms[]` with `terms_required`
+
+Set `VALUER_BRIDGE_BASE_URL` or `BASE_URL` to target a non-default host.
+
 ## Deployment
 
-The application is containerized using Docker and deployed to Google Cloud Run:
+The application is containerized using Docker and deployed through the VPS Compose flow, not Cloud Run. Build the image from this repo path but tag the runtime image as Valuer Bridge:
 
-1. Build the Docker image: `docker build -t valuer-agent .`
-2. Deploy to Cloud Run: `gcloud run deploy valuer-agent --image=valuer-agent`
+```bash
+docker build -t localhost:5000/app/valuer-bridge:prod-<stamp>-<sha> -f Dockerfile /srv/repos
+```
 
-The Cloud Run service must have access to Secret Manager to retrieve API keys.
+Use the Compose overlay at `/srv/infrastructure/vps-infra/compose/appraisily/runtime/docker-compose/valuer-agent/`. The overlay directory name remains legacy for now; the service/container/router names should use `valuer-bridge`.
 
 ## Error Handling
 
@@ -467,7 +488,7 @@ The application uses Express middleware for centralized error handling:
 
 ## Security
 
-- API Keys are stored in Google Cloud Secret Manager, not in code
+- API keys and DB credentials come from Vault or approved runtime stores, not code
 - Input validation on all endpoints using Zod schemas
 - Express security best practices including proper error handling
 

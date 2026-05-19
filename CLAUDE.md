@@ -1,4 +1,4 @@
-# CLAUDE.md - Valuer Agent Guidelines
+# CLAUDE.md - Valuer Bridge Guidelines
 
 ## Build/Test/Lint Commands
 - `npm run dev` - Run development server with tsx watch

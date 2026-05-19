@@ -1,5 +1,5 @@
 {
-  "name": "vite-react-typescript-starter",
+  "name": "appraisily-valuer-bridge",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -9,11 +9,13 @@
     "start": "node dist/server.js",
     "lint": "eslint .",
     "test": "vitest run",
+    "smoke": "node scripts/smoke/valuer-bridge-smoke.mjs",
     "env:check": "node ../../env-governance/run-check.mjs --schema services/valuer-agent",
     "prestart": "npm run env:check",
     "predev": "npm run env:check"
   },
   "dependencies": {
+    "amqplib": "^0.10.9",
     "express": "^4.18.2",
     "openai": "^4.28.0",
     "pg": "^8.16.3",

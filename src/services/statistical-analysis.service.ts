@@ -1,4 +1,12 @@
 import { SimplifiedAuctionItem } from './types.js';
+import {
+  applyRecencyWeights,
+  computeWeightedStats,
+  summarizeTimeAdjustment,
+  DEFAULT_RECENCY_CONFIG,
+  TimeAdjustmentSummary,
+  RecencyConfig,
+} from './utils/time-adjustment.js';
 
 // Interface for the core calculated statistics
 export interface CoreStatistics {
@@ -168,4 +176,49 @@ export class StatisticalAnalysisService {
 
         return roundedNum + "th";
     }
-} 
+
+    /**
+     * Calculates time-adjusted core statistics using recency-weighted aggregation.
+     * Older sales receive lower weights via exponential decay, so they contribute
+     * less to mean, median, and standard deviation.
+     *
+     * @param auctionResults - Array of simplified auction items (must have valid prices).
+     * @param targetValue - The target value for percentile and confidence calculations.
+     * @param referenceDate - The reference date for age calculation (defaults to now).
+     * @param config - Optional recency weight configuration.
+     * @returns Object with core statistics plus time-adjustment metadata, or null if insufficient data.
+     */
+    calculateTimeAdjustedStatistics(
+        auctionResults: SimplifiedAuctionItem[],
+        targetValue: number,
+        referenceDate: Date = new Date(),
+        config: RecencyConfig = DEFAULT_RECENCY_CONFIG,
+    ): { stats: CoreStatistics; summary: TimeAdjustmentSummary } | null {
+        const weightedItems = applyRecencyWeights(auctionResults, referenceDate, config);
+
+        if (weightedItems.length === 0) {
+            console.log('No valid auction results for time-adjusted statistics calculation.');
+            return null;
+        }
+
+        // Check that enough items have parseable dates to make weighting meaningful
+        const itemsWithDates = weightedItems.filter(
+            wi => wi.item.date && typeof wi.item.date === 'string' && !isNaN(new Date(wi.item.date).getTime()),
+        );
+        if (itemsWithDates.length < 3) {
+            console.log(`Only ${itemsWithDates.length} items have valid dates — insufficient for time adjustment.`);
+            return null;
+        }
+
+        console.log(`Calculating time-adjusted statistics for ${weightedItems.length} items (${itemsWithDates.length} with valid dates)`);
+
+        const stats = computeWeightedStats(weightedItems, targetValue);
+        if (!stats) return null;
+
+        const summary = summarizeTimeAdjustment(weightedItems);
+
+        console.log(`Time-adjusted stats: weighted avg=$${stats.average_price}, median=$${stats.median_price}, date range=${summary.date_range}, avg weight=${summary.avg_weight}`);
+
+        return { stats, summary };
+    }
+}

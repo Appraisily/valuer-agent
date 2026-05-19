@@ -183,6 +183,7 @@ function normalizeMediaRoot(value: NullableString): string {
 }
 
 const DEFAULT_MEDIA_ROOT = '/mnt/srv-storage/scrapper-db-data/data';
+const DEFAULT_PUBLIC_ASSETS_ROOT = '/mnt/srv-storage/storage/public';
 const categoryIndexCache = new Map<string, Promise<Set<string>>>();
 
 async function getCategoryIndex(mediaRoot: string): Promise<Set<string>> {
@@ -220,6 +221,29 @@ function cachedExists(filePath: string): boolean {
   return exists;
 }
 
+function normalizePublicAssetsRoot(value: NullableString): string {
+  const raw = String(value || process.env.PUBLIC_STORAGE_ROOT || DEFAULT_PUBLIC_ASSETS_ROOT).trim();
+  return raw ? raw.replace(/\/+$/, '') : DEFAULT_PUBLIC_ASSETS_ROOT;
+}
+
+export function isPublishedAssetPath(relativePath: NullableString): boolean {
+  const clean = String(relativePath || '').trim().replace(/^[\\/]+/, '').replace(/\\/g, '/');
+  return clean.startsWith('auction-lots/');
+}
+
+function resolvePublishedAssetAbsolutePath(relativePath: NullableString, publicRoot?: NullableString): string | null {
+  if (!isPublishedAssetPath(relativePath)) return null;
+  const clean = String(relativePath || '').trim().replace(/^[\\/]+/, '').replace(/\\/g, '/');
+  const root = normalizePublicAssetsRoot(publicRoot);
+  return path.resolve(root, clean);
+}
+
+export function publishedAssetExists(relativePath: NullableString, publicRoot?: NullableString): boolean {
+  const absolutePath = resolvePublishedAssetAbsolutePath(relativePath, publicRoot);
+  if (!absolutePath) return false;
+  return cachedExists(absolutePath);
+}
+
 function buildScraperDbPublishedImagePath(opts: {
   srcPath: NullableString;
   imageFileName: NullableString;
@@ -232,7 +256,9 @@ function buildScraperDbPublishedImagePath(opts: {
 
   const src = String(opts.srcPath || '').trim().replace(/\\/g, '/').replace(/^[\\/]+/, '');
   if (!src || src.startsWith('gs://')) return null;
-  if (src.startsWith('auction-lots/')) return src;
+  if (src.startsWith('auction-lots/')) {
+    return publishedAssetExists(src) ? src : null;
+  }
 
   const category = (() => {
     const match = src.match(/^([^/]+)\/images\//);
@@ -302,6 +328,90 @@ export function buildPublicAssetUrl(relativePath: string | null): string | null 
     .join('/');
 
   return `${base}/${safe}`;
+}
+
+export type LotImageAssetContract = {
+  imagePath: string | null;
+  thumbPath: string | null;
+  mediumPath: string | null;
+  originalPath: string | null;
+  thumbUrl: string | null;
+  imageUrl: string | null;
+  originalUrl: string | null;
+  imageOriginalUrl: string | null;
+};
+
+function normalizePublicAssetPath(relativePath: NullableString): string | null {
+  const raw = String(relativePath || '').trim();
+  if (!raw || raw.startsWith('gs://')) return null;
+  if (/^https?:\/\//i.test(raw)) {
+    const match = raw.match(/^https?:\/\/assets\.appraisily\.com\/(.+)$/i);
+    if (!match?.[1]) return null;
+    return match[1].replace(/^[\\/]+/, '').replace(/\\/g, '/');
+  }
+
+  let clean = raw.replace(/^[\\/]+/, '').replace(/\\/g, '/');
+  if (clean.startsWith('public/')) clean = clean.slice('public/'.length);
+  if (clean.startsWith('storage/public/')) clean = clean.slice('storage/public/'.length);
+  return clean.startsWith('auction-lots/') ? clean : null;
+}
+
+function lotVariantPath(relativePath: string, variant: 'thumb' | 'medium' | 'original'): string | null {
+  const match = relativePath.match(/^(auction-lots\/[^/]+)\/(thumb|medium|original)\/(.+)$/);
+  if (!match) return null;
+  return `${match[1]}/${variant}/${match[3]}`;
+}
+
+function existingVariantPath(relativePath: string, variant: 'thumb' | 'medium' | 'original'): string | null {
+  const candidate = lotVariantPath(relativePath, variant);
+  if (!candidate) return null;
+  return publishedAssetExists(candidate) ? candidate : null;
+}
+
+export function buildLotImageAssetContract(relativePath: NullableString): LotImageAssetContract {
+  const clean = normalizePublicAssetPath(relativePath);
+  if (!clean) {
+    return {
+      imagePath: null,
+      thumbPath: null,
+      mediumPath: null,
+      originalPath: null,
+      thumbUrl: null,
+      imageUrl: null,
+      originalUrl: null,
+      imageOriginalUrl: null,
+    };
+  }
+
+  const variantMatch = clean.match(/^auction-lots\/[^/]+\/(thumb|medium|original)\//);
+  const currentVariant = variantMatch?.[1] || null;
+  const currentExists = publishedAssetExists(clean);
+
+  const thumbPath = currentVariant === 'thumb'
+    ? clean
+    : (existingVariantPath(clean, 'thumb') || (currentExists || !currentVariant ? clean : null));
+  const mediumPath = currentVariant === 'medium'
+    ? clean
+    : (existingVariantPath(clean, 'medium') || thumbPath || (currentExists ? clean : null));
+  const originalPath = currentVariant === 'original'
+    ? clean
+    : (existingVariantPath(clean, 'original') || (currentExists ? clean : mediumPath || thumbPath));
+
+  const imagePath = originalPath || mediumPath || thumbPath || clean;
+  const thumbUrl = buildPublicAssetUrl(thumbPath || imagePath);
+  const imageUrl = buildPublicAssetUrl(mediumPath || thumbPath || imagePath);
+  const originalUrl = buildPublicAssetUrl(originalPath || imagePath);
+
+  return {
+    imagePath,
+    thumbPath,
+    mediumPath,
+    originalPath,
+    thumbUrl,
+    imageUrl,
+    originalUrl,
+    imageOriginalUrl: originalUrl,
+  };
 }
 
 export class ScraperDbClient {
@@ -485,7 +595,9 @@ export class ScraperDbClient {
       const estimateMin = row.estimate_min !== null && row.estimate_min !== undefined ? Number(row.estimate_min) : null;
       const estimateMax = row.estimate_max !== null && row.estimate_max !== undefined ? Number(row.estimate_max) : null;
 
-      const rawImagePath = (row.image_src_path || row.image_gcs_path || null) as string | null;
+      const srcImagePath = (row.image_src_path || null) as string | null;
+      const gcsImagePath = (row.image_gcs_path || null) as string | null;
+      const rawImagePath = (srcImagePath || gcsImagePath || null) as string | null;
       const publishedImagePath = buildScraperDbPublishedImagePath({
         srcPath: rawImagePath,
         imageFileName: row.image_filename || null,
@@ -493,7 +605,10 @@ export class ScraperDbClient {
         mediaRoot,
         categories,
       });
-      const imagePath = publishedImagePath || rawImagePath;
+      const imagePath = publishedImagePath
+        || (isPublishedAssetPath(srcImagePath) ? srcImagePath : null)
+        || (isPublishedAssetPath(gcsImagePath) ? gcsImagePath : null)
+        || rawImagePath;
       return {
         lotUid: String(row.lot_uid),
         title: row.title || null,

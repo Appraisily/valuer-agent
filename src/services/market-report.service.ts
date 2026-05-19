@@ -329,17 +329,19 @@ export class MarketReportService {
      * Formats comparable sales data, adding the current item and prioritizing items with higher quality scores.
      * @param comparableSales - Array of raw comparable sales (the consistent set, pre-limit).
      * @param targetValue - The value of the item being compared against.
+     * @param recencyWeights - Optional map of item key → recency weight from time adjustment.
      * @returns Formatted array of comparable sales including the target item, sorted by quality/relevance.
      */
     formatComparableSales(
         comparableSales: SimplifiedAuctionItem[],
-        targetValue: number
+        targetValue: number,
+        recencyWeights?: Map<string, number>
     ): FormattedAuctionItem[] {
         // First, check if we have quality scores from o3-mini
-        const hasQualityScores = comparableSales.some(item => 
+        const hasQualityScores = comparableSales.some(item =>
             typeof (item as any).quality_score === 'number'
         );
-        
+
         // Sort by quality score if available, otherwise by price proximity
         const sortedSales = [...comparableSales].sort((a, b) => {
             if (hasQualityScores) {
@@ -352,30 +354,39 @@ export class MarketReportService {
                 return Math.abs(a.price - targetValue) - Math.abs(b.price - targetValue);
             }
         });
-        
+
         // Limit to top 10 results if we have quality scores
-        const topSales = hasQualityScores 
-            ? sortedSales.slice(0, 10) 
+        const topSales = hasQualityScores
+            ? sortedSales.slice(0, 10)
             : sortedSales;
-        
+
         // Format the sales with diff percentage
         const formattedSales: FormattedAuctionItem[] = topSales.map(result => {
             const priceDiff = targetValue > 0 ? ((result.price - targetValue) / targetValue) * 100 : 0;
             const diffFormatted = priceDiff >= 0 ? `+${priceDiff.toFixed(1)}%` : `${priceDiff.toFixed(1)}%`;
-            
+
             // Include quality score in the output if available
             const formatted: FormattedAuctionItem = {
                 ...result,
                 diff: diffFormatted,
                 is_current: false
             };
-            
+
             // If we have a quality score, include it in the output
             if (typeof (result as any).quality_score === 'number') {
                 formatted.quality_score = (result as any).quality_score;
                 formatted.relevanceScore = (result as any).quality_score; // Keep for backward compatibility
             }
-            
+
+            // Attach recency weight if time adjustment was applied
+            if (recencyWeights) {
+                const itemKey = `${result.title}|${result.house}|${result.date}|${result.price}`;
+                const weight = recencyWeights.get(itemKey);
+                if (weight !== undefined) {
+                    formatted.recency_weight = Math.round(weight * 100) / 100;
+                }
+            }
+
             return formatted;
         });
 
@@ -401,13 +412,14 @@ export class MarketReportService {
             if (insertIndex === -1) insertIndex = formattedSales.length; // Insert at end if all are lower
             formattedSales.splice(insertIndex, 0, currentItem);
         }
-        
+
         // If we sorted by quality score, log the scores
         if (hasQualityScores) {
             console.log('Comparable sales sorted by AI quality score:');
             formattedSales.forEach((sale, index) => {
                 if (!sale.is_current) {
-                    console.log(`${index}. Score: ${sale.relevanceScore || 'N/A'}, Title: "${sale.title.substring(0, 50)}..."`);
+                    const rw = sale.recency_weight !== undefined ? ` Weight: ${sale.recency_weight}` : '';
+                    console.log(`${index}. Score: ${sale.relevanceScore || 'N/A'}${rw}, Title: "${sale.title.substring(0, 50)}..."`);
                 }
             });
         }

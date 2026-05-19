@@ -3,11 +3,9 @@ import type { RequestHandler } from 'express';
 import { z, ZodError } from 'zod';
 import OpenAI from 'openai';
 import { ValuerService } from './services/valuer.js';
-import { buildQueryPyramid, flattenPyramid } from './services/query-pyramid.js';
-import { callOpenAIAndParseJson } from './services/utils/openai-helper.js';
-import { KeywordExtractionService } from './services/keyword-extraction.service.js';
 import { JustifierAgent } from './services/justifier-agent.js';
 import { StatisticsService } from './services/statistics-service.js';
+import { callOpenAIAndParseJson } from './services/utils/openai-helper.js';
 import { archiveJSON, storageEnabled } from './services/utils/local-storage.js';
 import { messagingEnabled, publishEvent, closeBroker } from './services/utils/messaging.js';
 import { createRequire } from 'module';
@@ -28,8 +26,33 @@ function safeClone<T>(input: T): T | undefined {
   }
 }
 
+function comparableDedupeKey(lot: any, title: string): string {
+  const lotUid = lot?.lot_uid || lot?.lotUid || lot?.id || lot?.lotId;
+  if (lotUid) return `lot:${String(lotUid).trim()}`;
+  const url = lot?.url || lot?.lotUrl || lot?.sourceUrl || lot?.permalink;
+  if (url) return `url:${String(url).trim().toLowerCase()}`;
+  return `title:${String(title || '').trim().toLowerCase()}`;
+}
+
+function comparableImageFields(lot: any): {
+  thumbUrl?: string;
+  imageUrl?: string;
+  originalUrl?: string;
+  imageOriginalUrl?: string;
+} {
+  const thumbUrl = lot?.thumbUrl || lot?.thumbnail || lot?.thumb || lot?.smallImage || lot?.imageUrl || lot?.image;
+  const imageUrl = lot?.imageUrl || lot?.mediumUrl || lot?.image || thumbUrl;
+  const originalUrl = lot?.originalUrl || lot?.imageOriginalUrl || lot?.fullUrl || imageUrl;
+  return {
+    thumbUrl: thumbUrl ? String(thumbUrl) : undefined,
+    imageUrl: imageUrl ? String(imageUrl) : undefined,
+    originalUrl: originalUrl ? String(originalUrl) : undefined,
+    imageOriginalUrl: originalUrl ? String(originalUrl) : undefined,
+  };
+}
+
 const shouldArchiveResponses = String(process.env.VALUER_ARCHIVE_RESPONSES ?? process.env.SAVE_VALUER_RESPONSES ?? 'false').toLowerCase() === 'true';
-const archivePrefix = process.env.VALUER_ARCHIVE_PREFIX ?? 'valuer-agent/responses';
+const archivePrefix = process.env.VALUER_ARCHIVE_PREFIX ?? 'valuer-bridge/responses';
 const eventRoutingKey = process.env.MESSAGE_ROUTING_KEY ?? 'valuer.http.completed';
 
 const app = express();
@@ -42,7 +65,11 @@ app.options('*', corsMiddleware);
 app.use(express.json());
 
 app.get('/health', (_req: Request, res: Response) => {
-  res.status(200).json({ status: 'ok' });
+  res.status(200).json({
+    status: 'ok',
+    service: 'valuer-bridge',
+    ...valuer.getReadiness(),
+  });
 });
 
 // Structured HTTP request logs (start/end with durationMs)
@@ -84,9 +111,9 @@ app.use((req: Request, res: Response, next: NextFunction) => {
       if (messagingEnabled) {
         publishEvent(eventRoutingKey, summary, {
           'x-request-id': String(requestId),
-          'x-service': 'valuer-agent'
+          'x-service': 'valuer-bridge'
         }).catch((err: unknown) => {
-          console.warn('[valuer-agent] Failed to publish request event:', (err as Error)?.message ?? err);
+          console.warn('[valuer-bridge] Failed to publish request event:', (err as Error)?.message ?? err);
         });
       }
 
@@ -100,7 +127,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
           response: (res.locals as Record<string, unknown>).responseBody
         };
         archiveJSON(archivePrefix, payload).catch((err: unknown) => {
-          console.warn('[valuer-agent] Failed to archive response payload:', (err as Error)?.message ?? err);
+          console.warn('[valuer-bridge] Failed to archive response payload:', (err as Error)?.message ?? err);
         });
       }
     });
@@ -112,7 +139,6 @@ let openai: OpenAI;
 let justifier: JustifierAgent;
 let statistics: StatisticsService;
 const valuer = new ValuerService();
-let keyworder: KeywordExtractionService;
 
 // Initialize OpenAI client with secret
 async function initializeOpenAI() {
@@ -120,7 +146,6 @@ async function initializeOpenAI() {
   openai = new OpenAI({ apiKey });
   justifier = new JustifierAgent(openai, valuer);
   statistics = new StatisticsService(openai, valuer);
-  keyworder = new KeywordExtractionService(openai);
 }
 
 const RequestSchema = z.object({
@@ -150,7 +175,7 @@ const EnhancedStatisticsRequestSchema = z.object({
 
 // Middleware to check if essential services are initialized
 const checkServicesInitialized = (_req: Request, _res: Response, next: NextFunction) => {
-  if (!openai || !justifier || !statistics || !keyworder) {
+  if (!openai || !justifier || !statistics) {
     // Use next(error) to pass control to the error handling middleware
     return next(new Error('Core services not initialized'));
   }
@@ -370,7 +395,7 @@ const MultiSearchSchema = z.object({
 });
 
 app.post('/api/multi-search', asyncHandler(async (req, res) => {
-  const { description, primaryImageUrl, additionalImageUrls = [], minPrice, maxPrice, concurrency = Number(process.env.VALUER_BATCH_CONCURRENCY || 5), limitPerQuery = 100, sort = 'relevance', timeoutMs, retries, maxQueries, terms, skipSummary = false, maxItems, targetValue, justify, category, maker, brand, model, subject, styleEra, mediumMaterial, region } = MultiSearchSchema.parse(req.body);
+  const { description, minPrice, maxPrice, concurrency = Number(process.env.VALUER_BATCH_CONCURRENCY || 5), limitPerQuery = 100, sort = 'relevance', timeoutMs, retries, maxQueries, terms, skipSummary = false, maxItems, targetValue, justify, category } = MultiSearchSchema.parse(req.body);
 
   // Enforce upstream ownership of term generation: require non-empty terms[]
   const providedTerms = Array.isArray(terms) ? Array.from(new Set(terms.map(t => String(t).trim()).filter(Boolean))) : [];
@@ -413,51 +438,7 @@ app.post('/api/multi-search', asyncHandler(async (req, res) => {
 
   console.log(`Multi-search request: desc len=${description.length}, minPrice=${effMinPrice}${effMaxPrice ? `, maxPrice=${effMaxPrice}` : ''}, concurrency=${concurrency}, justify=${justifyMode}`);
 
-  // Generate search terms using the domain-aware pyramid when requested or when no explicit terms are passed.
-  const imagesList = [primaryImageUrl, ...additionalImageUrls.filter(Boolean)].filter(Boolean).slice(0, 3);
-  const keywordPrompt = [
-    'Generate EXACTLY 5 auction search terms (short, standard catalog terms) for finding comparable items.',
-    'Use the description and consider the image URLs as context. Optimize for speed and broad matching.',
-    'Return JSON of the form { "terms": ["...", "...", "...", "...", "..."] } with 5 items only.',
-    '',
-    `Description: ${description}`,
-    imagesList.length > 0 ? `Image URLs: ${imagesList.join(', ')}` : ''
-  ].join('\n');
-
-  let selected: string[] = [];
-  if (Array.isArray(terms) && terms.length > 0) {
-    selected = Array.from(new Set(terms.map(t => String(t).trim()).filter(Boolean)));
-  } else {
-    // Default: use pyramid (specific -> broad). Fallback to GPT extraction only if pyramid fails
-    try {
-      const pyramid = buildQueryPyramid({ description, category, maker, brand, model, subject, styleEra, mediumMaterial, region });
-      const cap = Math.max(1, Math.min(20, typeof maxQueries === 'number' ? maxQueries : 10));
-      selected = flattenPyramid(pyramid, cap);
-      console.log(`Using pyramid queries (${selected.length}): ${selected.join(' | ')}`);
-    } catch (e) {
-      console.warn('Pyramid query build failed; falling back to keyword generation:', (e as Error)?.message || e);
-      try {
-        const termsJson = await callOpenAIAndParseJson<{ terms: string[] }>(openai, {
-          model: 'gpt-5',
-          systemMessage: 'You are an expert in auction terminology and search optimization. Produce only valid JSON.',
-          userPrompt: keywordPrompt,
-          expectJsonResponse: true
-        });
-        const t = Array.isArray(termsJson?.terms) ? termsJson.terms : [];
-        const cap = Math.max(1, Math.min(10, typeof maxQueries === 'number' ? maxQueries : 5));
-        selected = t.slice(0, cap);
-      } catch (e2) {
-        console.warn('Keyword generation via GPT-5 failed; falling back to text-only extractor:', (e2 as Error)?.message || e2);
-        const fallback = await keyworder.extractKeywords(description);
-        const cap = Math.max(1, Math.min(10, typeof maxQueries === 'number' ? maxQueries : 5));
-        selected = fallback.slice(0, cap);
-      }
-    }
-  }
-
-  if (selected.length === 0) {
-    return res.status(503).json({ success: false, error: 'Failed to generate search terms' });
-  }
+  const selected = providedTerms;
 
   const perQueryLimit = (() => {
     const cap = Math.max(1, selected.length || 1);
@@ -479,48 +460,50 @@ app.post('/api/multi-search', asyncHandler(async (req, res) => {
     : (HAS_ENV_CAP ? Math.ceil(_envEarlyStop) : Infinity);
   const tBatch0 = Date.now();
   // Aggregate compact items for summarization and UI
-  type CompactItem = { title?: string; price?: { amount?: number; currency?: string }; auctionHouse?: string; date?: string; url?: string; thumbUrl?: string };
-  const uniqueTitles = new Set<string>();
+  type CompactItem = {
+    id?: string;
+    lot_uid?: string;
+    lotId?: string;
+    title?: string;
+    price?: { amount?: number; currency?: string };
+    auctionHouse?: string;
+    date?: string;
+    url?: string;
+    thumbUrl?: string;
+    imageUrl?: string;
+    originalUrl?: string;
+    imageOriginalUrl?: string;
+    imagePath?: string;
+    imageFileName?: string;
+  };
+  const uniqueComparableKeys = new Set<string>();
   let aggregated: CompactItem[] = [];
   const byQuery: any[] = [];
   const allExecutedQueries: string[] = [];
   const cumulativeStats = { total: 0, completed: 0, failed: 0, durationMs: 0 };
-  // Build tiered queries. Prefer caller-provided terms when present to keep WS as the owner of term generation.
+  // Build tiered queries from caller-provided terms. Valuer Bridge does not generate terms.
   let tiers: Array<{ name: string; terms: string[] }>;
-  if (Array.isArray(terms) && terms.length > 0) {
-    const src = Array.from(new Set(terms.map(t => String(t).trim()).filter(Boolean)));
-    // Optionally split provided terms into pseudo-tiers (9-9-3) so logs show per-tier execution.
-    // Enabled by default when enough terms are provided; can be disabled via env.
-    const splitEnv = String(process.env.PROVIDED_TIER_SPLIT || 'true').toLowerCase();
-    const splitEnabled = (splitEnv === '1' || splitEnv === 'true' || splitEnv === 'yes');
-    if (splitEnabled && src.length >= 3) {
-      const verySpecific = src.slice(0, 9);
-      const specific = src.slice(9, 18);
-      const broad = src.slice(18, 21);
-      tiers = [];
-      if (verySpecific.length) tiers.push({ name: 'very specific', terms: verySpecific });
-      if (specific.length) tiers.push({ name: 'specific', terms: specific });
-      if (broad.length) tiers.push({ name: 'broad', terms: broad });
-      try {
-        console.log('Tier plan (provided terms):', {
-          verySpecific: verySpecific.length,
-          specific: specific.length,
-          broad: broad.length,
-          total: src.length
-        });
-      } catch (_) {}
-    } else {
-      tiers = [ { name: 'provided', terms: src } ];
-    }
+  const src = selected;
+  const splitEnv = String(process.env.PROVIDED_TIER_SPLIT || 'true').toLowerCase();
+  const splitEnabled = (splitEnv === '1' || splitEnv === 'true' || splitEnv === 'yes');
+  if (splitEnabled && src.length >= 3) {
+    const verySpecific = src.slice(0, 9);
+    const specific = src.slice(9, 18);
+    const broad = src.slice(18, 21);
+    tiers = [];
+    if (verySpecific.length) tiers.push({ name: 'very specific', terms: verySpecific });
+    if (specific.length) tiers.push({ name: 'specific', terms: specific });
+    if (broad.length) tiers.push({ name: 'broad', terms: broad });
+    try {
+      console.log('Tier plan (provided terms):', {
+        verySpecific: verySpecific.length,
+        specific: specific.length,
+        broad: broad.length,
+        total: src.length
+      });
+    } catch (_) {}
   } else {
-    const pyramidRun = buildQueryPyramid({ description, category, maker, brand, model, subject, styleEra, mediumMaterial, region });
-    tiers = [
-      { name: 'very specific', terms: pyramidRun['very specific'] || [] },
-      { name: 'specific', terms: pyramidRun['specific'] || [] },
-      { name: 'moderate', terms: pyramidRun['moderate'] || [] },
-      { name: 'broad', terms: pyramidRun['broad'] || [] },
-      { name: 'very broad', terms: pyramidRun['very broad'] || [] },
-    ];
+    tiers = [ { name: 'provided', terms: src } ];
   }
 
   let remainingBudget = typeof maxQueries === 'number' ? Math.max(1, maxQueries) : Infinity;
@@ -582,78 +565,32 @@ app.post('/api/multi-search', asyncHandler(async (req, res) => {
           break;
         }
         const title: string | undefined = lot?.title || lot?.lotTitle;
-        if (!title || uniqueTitles.has(title)) continue;
-        uniqueTitles.add(title);
+        if (!title) continue;
+        const dedupeKey = comparableDedupeKey(lot, title);
+        if (uniqueComparableKeys.has(dedupeKey)) continue;
+        uniqueComparableKeys.add(dedupeKey);
         const priceAmount = (lot?.price && typeof lot.price.amount === 'number') ? lot.price.amount : (typeof lot?.priceResult === 'number' ? lot.priceResult : undefined);
         const currency = lot?.price?.currency || lot?.currency || lot?.currencyCode || 'USD';
-        const thumbUrl: string | undefined = lot?.thumbUrl || lot?.thumbnail || lot?.thumb || lot?.image || lot?.imageUrl;
+        const imageFields = comparableImageFields(lot);
+        const lotUid: string | undefined = lot?.lot_uid || lot?.lotUid || lot?.id || lot?.lotId;
         aggregated.push({
+          id: lotUid ? String(lotUid) : undefined,
+          lot_uid: lotUid ? String(lotUid) : undefined,
+          lotId: lotUid ? String(lotUid) : undefined,
           title,
           price: priceAmount ? { amount: priceAmount, currency } : undefined,
           auctionHouse: lot?.auctionHouse || lot?.house || lot?.houseName,
           date: lot?.date || lot?.dateTimeLocal,
           url: lot?.url || lot?.lotUrl || lot?.permalink,
-          thumbUrl: thumbUrl ? String(thumbUrl) : undefined,
+          ...imageFields,
+          imagePath: lot?.imagePath ? String(lot.imagePath) : undefined,
+          imageFileName: lot?.imageFileName ? String(lot.imageFileName) : undefined,
         });
       }
       byQuery.push({ ...s, meta });
     }
     const added = aggregated.length - preCount;
     console.log(`Tier="${tier.name}" contributed ${added} unique lots (total=${aggregated.length})`);
-  }
-
-  // Aggregation complete; proceed to optional fallback if needed
-
-  // Fallback: if nothing found, try again with lower minPrice and broader terms
-  if (aggregated.length === 0) {
-    try {
-      const fallbackMin = Math.max(0, Math.floor((minPrice ?? Number(process.env.VALUER_MIN_PRICE_DEFAULT || '250')) / 2));
-      const altMin = fallbackMin > 0 ? fallbackMin : 100;
-      console.log(`No lots found. Retrying batch with reduced minPrice=${altMin}`);
-      const fallbackQueries = (allExecutedQueries.length > 0 ? allExecutedQueries : selected);
-      const fallbackSearches = fallbackQueries.map(q => ({ query: q, priceResult: { min: String(altMin) }, limit: perQueryLimit, sort }));
-      const t1 = Date.now();
-      const batch2 = await valuer.batchSearch({
-        searches: fallbackSearches,
-        concurrency,
-        // Fetch ONLY the first page per query
-        fetchAllPages: false
-      }, {
-        timeoutMs: typeof timeoutMs === 'number' ? timeoutMs : Number(process.env.VALUER_BATCH_HTTP_TIMEOUT_MS || 0) || undefined,
-        retry: typeof retries === 'number' ? { attempts: retries } : undefined,
-      });
-      console.log(`Fallback batch completed in ${Date.now() - t1}ms with ${batch2?.searches?.length || 0} segments`);
-      for (const s of batch2.searches || []) {
-        const lots = s?.result?.data?.lots || [];
-        const meta = { query: s?.query || '', lotsCount: Array.isArray(lots) ? lots.length : 0, error: s?.error || undefined };
-        for (const lot of lots) {
-          if (Number.isFinite(MAX_ITEMS_TOTAL) && aggregated.length >= MAX_ITEMS_TOTAL) {
-            if (!capLogged) {
-              console.log(`Cap reached at ${MAX_ITEMS_TOTAL} unique lots. Continuing to execute remaining queries without collecting additional items.`);
-              capLogged = true;
-            }
-            break;
-          }
-          const title: string | undefined = lot?.title || lot?.lotTitle;
-          if (!title || uniqueTitles.has(title)) continue;
-          uniqueTitles.add(title);
-          const priceAmount = (lot?.price && typeof lot.price.amount === 'number') ? lot.price.amount : (typeof lot?.priceResult === 'number' ? lot.priceResult : undefined);
-          const currency = lot?.price?.currency || lot?.currency || lot?.currencyCode || 'USD';
-          const thumbUrl: string | undefined = lot?.thumbUrl || lot?.thumbnail || lot?.thumb || lot?.image || lot?.imageUrl;
-          aggregated.push({
-            title,
-            price: priceAmount ? { amount: priceAmount, currency } : undefined,
-            auctionHouse: lot?.auctionHouse || lot?.house || lot?.houseName,
-            date: lot?.date || lot?.dateTimeLocal,
-            url: lot?.url || lot?.lotUrl || lot?.permalink,
-            thumbUrl: thumbUrl ? String(thumbUrl) : undefined,
-          });
-        }
-        byQuery.push({ ...s, meta });
-      }
-    } catch (e) {
-      console.warn('Fallback batch failed:', (e as Error)?.message || e);
-    }
   }
 
   // Optional category filtering to reduce cross-domain drift
@@ -749,7 +686,7 @@ app.post('/api/multi-search', asyncHandler(async (req, res) => {
       lots: aggregated,
       byQuery
     },
-    stats: { ...cumulativeStats, uniqueLots: uniqueTitles.size, totalLots, durationMs },
+    stats: { ...cumulativeStats, uniqueLots: uniqueComparableKeys.size, totalLots, durationMs },
     summary: summary || undefined
   });
 }));
@@ -847,187 +784,104 @@ app.post('/v2/search/batch', asyncHandler(async (req, res) => {
   const justify = Boolean(pricing.justify);
 
   // Execute as a single combined batch across all tiers (respect provided plan)
-  {
-    type TermWithTier = { term: string; tier: string };
-    const combined: TermWithTier[] = [];
-    const vs = Array.isArray(terms.very_specific) ? Array.from(new Set(terms.very_specific.map(String).map(s=>s.trim()).filter(Boolean))) : [];
-    const sp = Array.isArray(terms.specific) ? Array.from(new Set(terms.specific.map(String).map(s=>s.trim()).filter(Boolean))) : [];
-    const md = Array.isArray(terms.moderate) ? Array.from(new Set(terms.moderate.map(String).map(s=>s.trim()).filter(Boolean))) : [];
-    const flattened = Array.isArray(terms.flattened) ? terms.flattened : [...vs, ...sp, ...md];
-    vs.forEach(t => combined.push({ term: t, tier: 'very specific' }));
-    sp.forEach(t => combined.push({ term: t, tier: 'specific' }));
-    md.forEach(t => combined.push({ term: t, tier: 'moderate' }));
-    if (combined.length === 0) {
-      flattened.forEach(t => combined.push({ term: t, tier: 'provided' }));
-    }
-
-    if (typeof limits.total === 'number' && isFinite(limits.total) && limits.total !== combined.length) {
-      try { console.log(`Note: limits.total=${limits.total} != providedTerms=${combined.length}. Proceeding with provided terms to honor plan.`); } catch (_) {}
-    }
-
-    const uniqueTitles2 = new Set<string>();
-    const aggregated2: Array<{ title?: string; price?: { amount?: number; currency?: string }; auctionHouse?: string; date?: string; url?: string }> = [];
-    const byQuery2: any[] = [];
-    const allExecuted2: Array<{ term: string; tier: string }> = [];
-    const tStart2 = Date.now();
-
-    const searches = combined.map(({ term, tier }) => {
-      const priceResult: any = { min: String(effMinPrice) };
-      if (typeof effMaxPrice === 'number') priceResult.max = String(effMaxPrice);
-      allExecuted2.push({ term, tier });
-      return ({ query: term, priceResult, limit: limitPerQuery, sort });
-    });
-
-    const t0 = Date.now();
-    const skipThumbPublish = (() => {
-      const rev = typeof ctx.rev === 'string' ? ctx.rev : '';
-      return rev.startsWith('instant-appraisal');
-    })();
-
-    const batch = await valuer.batchSearch({
-      searches,
-      concurrency: Math.min(concurrency, searches.length),
-      fetchAllPages: false,
-      skipThumbPublish,
-    }, batchOptions);
-    const batchDuration = Date.now() - t0;
-    console.log(`Batch search completed: total=${batch?.batch?.total || searches.length}, completed=${batch?.batch?.completed || 0}, failed=${batch?.batch?.failed || 0}, concurrency=${Math.min(concurrency, searches.length)}, durationMs=${batchDuration}`);
-
-    for (let i = 0; i < (batch.searches || []).length; i++) {
-      const s = (batch.searches || [])[i];
-      const lots = s?.result?.data?.lots || [];
-      const meta = { query: s?.query || combined[i]?.term || '', lotsCount: Array.isArray(lots) ? lots.length : 0, tier: combined[i]?.tier };
-      byQuery2.push({ ...s, meta });
-      for (const lot of lots) {
-        const rawTitle = lot?.title || lot?.lotTitle;
-        if (typeof rawTitle !== 'string' || rawTitle.length === 0) continue;
-        const title = rawTitle;
-        if (uniqueTitles2.has(title)) continue;
-        uniqueTitles2.add(title);
-        const priceAmount = (lot?.price && typeof lot.price.amount === 'number') ? lot.price.amount : (typeof lot?.priceResult === 'number' ? lot.priceResult : undefined);
-        const currency = lot?.price?.currency || lot?.currency || lot?.currencyCode || 'USD';
-        aggregated2.push({
-          title,
-          price: priceAmount ? { amount: priceAmount, currency } : undefined,
-          auctionHouse: lot?.auctionHouse || lot?.house || lot?.houseName,
-          date: lot?.date || lot?.dateTimeLocal,
-          url: lot?.url || lot?.lotUrl
-        });
-      }
-    }
-
-    const durationMs2 = Date.now() - tStart2;
-    const summary2 = { totalItems: aggregated2.length, uniqueLots: uniqueTitles2.size, durationMs: durationMs2 };
-    const acceptedPlan = {
-      very_specific: vs.length,
-      specific: sp.length,
-      moderate: md.length,
-      total: (Array.isArray(terms.flattened) ? terms.flattened.length : (vs.length + sp.length + md.length)),
-    };
-
-    return res.json({
-      success: true,
-      correlationId: corrId || null,
-      acceptedPlan,
-      used: { queries: allExecuted2, pricing: { min: effMinPrice, max: effMaxPrice || null, reference: (pricing as any).reference ?? null, justify } },
-      data: { byQuery: byQuery2 },
-      batch: batch?.batch || { total: searches.length, completed: (batch?.searches || []).length, failed: 0 },
-      summary: summary2,
-      meta: { schemaVersion, context: ctx }
-    });
+  type TermWithTier = { term: string; tier: string };
+  const combined: TermWithTier[] = [];
+  vs.forEach(t => combined.push({ term: t, tier: 'very specific' }));
+  sp.forEach(t => combined.push({ term: t, tier: 'specific' }));
+  md.forEach(t => combined.push({ term: t, tier: 'moderate' }));
+  if (combined.length === 0) {
+    flattened.forEach(t => combined.push({ term: t, tier: 'provided' }));
   }
 
-  // Apply total cap across tiers
-  const normalizeTotalLimit = (value: number | undefined): number | undefined => {
-    if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
-    return Math.max(0, Math.floor(value));
-  };
-  const normalizedTotalLimit = normalizeTotalLimit(limits.total);
-  let remaining = normalizedTotalLimit ?? Infinity;
-  type Tier = { name: string; terms: string[] };
-  const tiers: Tier[] = [];
-  if (vs.length) tiers.push({ name: 'very specific', terms: vs });
-  if (sp.length) tiers.push({ name: 'specific', terms: sp });
-  if (md.length) tiers.push({ name: 'moderate', terms: md });
-  if (tiers.length === 0) {
-    // Fallback to single-tier execution over flattened
-    tiers.push({ name: 'provided', terms: flattened });
+  if (typeof limits.total === 'number' && isFinite(limits.total) && limits.total !== combined.length) {
+    try { console.log(`Note: limits.total=${limits.total} != providedTerms=${combined.length}. Proceeding with provided terms to honor plan.`); } catch (_) {}
   }
 
-  const uniqueTitles = new Set<string>();
-  const aggregated: Array<{ title?: string; price?: { amount?: number; currency?: string }; auctionHouse?: string; date?: string; url?: string }> = [];
+  const uniqueComparableKeys = new Set<string>();
+  const aggregated: Array<{
+    id?: string;
+    lot_uid?: string;
+    lotId?: string;
+    title?: string;
+    price?: { amount?: number; currency?: string };
+    auctionHouse?: string;
+    date?: string;
+    url?: string;
+    thumbUrl?: string;
+    imageUrl?: string;
+    originalUrl?: string;
+    imageOriginalUrl?: string;
+    imagePath?: string;
+    imageFileName?: string;
+  }> = [];
   const byQuery: any[] = [];
   const allExecuted: Array<{ term: string; tier: string }> = [];
-  const batchTotals = { total: 0, completed: 0, failed: 0 };
   const tStart = Date.now();
 
-  for (let i = 0; i < tiers.length; i++) {
-    const tier = tiers[i];
-    if (remaining <= 0) break;
-    const clean = tier.terms.filter(Boolean);
-    const tiersLeft = (tiers.length - i);
-    const spread = Math.ceil((isFinite(remaining) ? remaining : clean.length) / Math.max(1, tiersLeft));
-    const desiredForTier = Math.max(concurrency, spread);
-    const takeCount = Math.min(isFinite(remaining) ? remaining : clean.length, Math.min(desiredForTier, clean.length));
-    const tierTerms = clean.slice(0, takeCount);
-    if (tierTerms.length === 0) continue;
+  const searches = combined.map(({ term, tier }) => {
+    const priceResult: any = { min: String(effMinPrice) };
+    if (typeof effMaxPrice === 'number') priceResult.max = String(effMaxPrice);
+    allExecuted.push({ term, tier });
+    return ({ query: term, priceResult, limit: limitPerQuery, sort });
+  });
 
-    try { console.log(`Executing tier "${tier.name}" queries: ${tierTerms.join(' | ')}`); } catch (_) {}
+  const t0 = Date.now();
+  const skipThumbPublish = (() => {
+    const rev = typeof ctx.rev === 'string' ? ctx.rev : '';
+    return rev.startsWith('instant-appraisal') || rev.startsWith('appraisily-pro-mcp');
+  })();
 
-    const searchesTier = tierTerms.map(q => {
-      const priceResult: any = { min: String(effMinPrice) };
-      if (typeof effMaxPrice === 'number') priceResult.max = String(effMaxPrice);
-      allExecuted.push({ term: q, tier: tier.name });
-      return ({ query: q, priceResult, limit: limitPerQuery, sort });
-    });
+  const batch = await valuer.batchSearch({
+    searches,
+    concurrency: Math.min(concurrency, searches.length),
+    fetchAllPages: false,
+    skipThumbPublish,
+  }, batchOptions);
+  const batchDuration = Date.now() - t0;
+  console.log(`Batch search completed: total=${batch?.batch?.total || searches.length}, completed=${batch?.batch?.completed || 0}, failed=${batch?.batch?.failed || 0}, concurrency=${Math.min(concurrency, searches.length)}, durationMs=${batchDuration}`);
 
-    const t0 = Date.now();
-    const batchTier = await valuer.batchSearch({
-      searches: searchesTier,
-      concurrency: Math.min(concurrency, searchesTier.length),
-      fetchAllPages: false
-    }, batchOptions);
-    const tierDuration = Date.now() - t0;
-    console.log(`Batch search completed: total=${batchTier?.batch?.total || searchesTier.length}, completed=${batchTier?.batch?.completed || 0}, failed=${batchTier?.batch?.failed || 0}, concurrency=${Math.min(concurrency, searchesTier.length)}, durationMs=${tierDuration}`);
-    batchTotals.total += batchTier?.batch?.total || searchesTier.length;
-    batchTotals.completed += batchTier?.batch?.completed || 0;
-    batchTotals.failed += batchTier?.batch?.failed || 0;
-
-    remaining = isFinite(remaining) ? Math.max(0, remaining - tierTerms.length) : remaining;
-
-    for (const s of batchTier.searches || []) {
-      const lots = s?.result?.data?.lots || [];
-      const meta = { query: s?.query || '', lotsCount: Array.isArray(lots) ? lots.length : 0 };
-      byQuery.push({ ...s, meta });
-      for (const lot of lots) {
-        const rawTitle = lot?.title || lot?.lotTitle;
-        if (typeof rawTitle !== 'string' || rawTitle.length === 0) continue;
-        const title = rawTitle;
-        if (uniqueTitles.has(title)) continue;
-        uniqueTitles.add(title);
-        const priceAmount = (lot?.price && typeof lot.price.amount === 'number') ? lot.price.amount : (typeof lot?.priceResult === 'number' ? lot.priceResult : undefined);
-        const currency = lot?.price?.currency || lot?.currency || lot?.currencyCode || 'USD';
-        aggregated.push({
-          title,
-          price: priceAmount ? { amount: priceAmount, currency } : undefined,
-          auctionHouse: lot?.auctionHouse || lot?.house || lot?.houseName,
-          date: lot?.date || lot?.dateTimeLocal,
-          url: lot?.url || lot?.lotUrl
-        });
-      }
+  for (let i = 0; i < (batch.searches || []).length; i++) {
+    const s = (batch.searches || [])[i];
+    const lots = s?.result?.data?.lots || [];
+    const meta = { query: s?.query || combined[i]?.term || '', lotsCount: Array.isArray(lots) ? lots.length : 0, tier: combined[i]?.tier };
+    byQuery.push({ ...s, meta });
+    for (const lot of lots) {
+      const rawTitle = lot?.title || lot?.lotTitle;
+      if (typeof rawTitle !== 'string' || rawTitle.length === 0) continue;
+      const title = rawTitle;
+      const dedupeKey = comparableDedupeKey(lot, title);
+      if (uniqueComparableKeys.has(dedupeKey)) continue;
+      uniqueComparableKeys.add(dedupeKey);
+      const priceAmount = (lot?.price && typeof lot.price.amount === 'number') ? lot.price.amount : (typeof lot?.priceResult === 'number' ? lot.priceResult : undefined);
+      const currency = lot?.price?.currency || lot?.currency || lot?.currencyCode || 'USD';
+      const imageFields = comparableImageFields(lot);
+      const lotUid: string | undefined = lot?.lot_uid || lot?.lotUid || lot?.id || lot?.lotId;
+      aggregated.push({
+        id: lotUid ? String(lotUid) : undefined,
+        lot_uid: lotUid ? String(lotUid) : undefined,
+        lotId: lotUid ? String(lotUid) : undefined,
+        title,
+        price: priceAmount ? { amount: priceAmount, currency } : undefined,
+        auctionHouse: lot?.auctionHouse || lot?.house || lot?.houseName,
+        date: lot?.date || lot?.dateTimeLocal,
+        url: lot?.url || lot?.lotUrl,
+        ...imageFields,
+        imagePath: lot?.imagePath ? String(lot.imagePath) : undefined,
+        imageFileName: lot?.imageFileName ? String(lot.imageFileName) : undefined,
+      });
     }
   }
 
   const durationMs = Date.now() - tStart;
-  const summary = { totalItems: aggregated.length, uniqueLots: uniqueTitles.size, durationMs };
+  const summary = { totalItems: aggregated.length, uniqueLots: uniqueComparableKeys.size, durationMs };
 
   return res.json({
     success: true,
     correlationId: corrId || null,
     acceptedPlan,
-    used: { queries: allExecuted, pricing: { min: effMinPrice, max: effMaxPrice || null, justify } },
+    used: { queries: allExecuted, pricing: { min: effMinPrice, max: effMaxPrice || null, reference: (pricing as any).reference ?? null, justify } },
     data: { byQuery },
-    batch: batchTotals,
+    batch: batch?.batch || { total: searches.length, completed: (batch?.searches || []).length, failed: 0 },
     summary,
     meta: { schemaVersion, context: ctx }
   });
@@ -1175,11 +1029,12 @@ function getExampleRequestBody(path: string): any {
 const port = process.env.PORT || 8080;
 
 async function gracefulShutdown(signal: string) {
-  console.log(`[valuer-agent] Received ${signal}, shutting down gracefully…`);
+  console.log(`[valuer-bridge] Received ${signal}, shutting down gracefully...`);
   try {
     await closeBroker();
+    await valuer.close();
   } catch (err) {
-    console.warn('[valuer-agent] Error closing messaging broker:', (err as Error)?.message ?? err);
+    console.warn('[valuer-bridge] Error during shutdown:', (err as Error)?.message ?? err);
   } finally {
     process.exit(0);
   }

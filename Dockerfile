@@ -26,19 +26,11 @@ ENV ENV_GOV_REPO_ROOT=/usr/src/env-check
 RUN mkdir -p /usr/src/env-check/services/valuer-agent \
     && cp ./.env.names /usr/src/env-check/services/valuer-agent/.env.names
 
-# Build-time env-check requires these vars to be present.
-# Values are placeholders and do not ship to the runtime image.
-ENV PORT=8080
-ENV GOOGLE_CLOUD_PROJECT_ID=build
-ENV AZTOKEN_PROD=build
-ENV INVALUABLE_CF_CLEARANCE=build
-ENV OPENAI_API_KEY=build
-ENV PUBLIC_ASSETS_BASE_URL=https://assets.appraisily.com
-ENV SCRAPER_DB_URL=postgres://build:build@localhost:5432/scraper
-ENV SCRAPER_DB_SSL=false
-ENV SCRAPER_DB_QUERY_TIMEOUT_MS=10000
-ENV SCRAPER_DB_AUTO_MIN_LOTS=5
-ENV VALUER_PROVIDER=live
+# Build-time env-check requires the schema keys to exist, but those values do not
+# ship to the runtime image. Generate a placeholder env file directly from
+# `.env.names` so the Dockerfile stays in sync as the schema evolves.
+RUN node -e "const fs=require('fs');const src='.env.names';const dst='/tmp/build.env';const lines=fs.readFileSync(src,'utf8').split(/\\r?\\n/).map(l=>l.trim()).filter(l=>l&&!l.startsWith('#')).map(l=>l.split(/[\\s#]/)[0].trim()).filter(Boolean).map(k=>k+'=build');fs.writeFileSync(dst, lines.join('\\n')+'\\n');"
+ENV ENV_GOV_ENV_FILE=/tmp/build.env
 
 RUN npm run build
 
@@ -55,6 +47,7 @@ COPY --from=builder /usr/env-governance /usr/env-governance
 COPY --from=builder /usr/src/env-check /usr/src/env-check
 
 ENV NODE_ENV=production
+ENV NODE_PATH=/usr/src/app/node_modules
 ENV PORT=8080
 ENV ENV_GOV_REPO_ROOT=/usr/src/env-check
 
