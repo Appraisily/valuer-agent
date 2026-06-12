@@ -1,500 +1,127 @@
-# Valuer Bridge Backend
+# Valuer Bridge
 
-A Node.js/Express backend service for antique and collectible item valuation and analysis, leveraging OpenAI language models and Appraisily's scraper database.
+Valuer Bridge is the DB-backed comparable-auction search service for Appraisily.
 
-Naming note: the canonical product/ops name is **Valuer Bridge** because this service is a bridge/tool API for auction data access, not a Codex agent. The repo path remains `repos/services/valuer-agent` for source-control continuity. Runtime-facing names should use `valuer-bridge`; `valuer-agent` is a temporary compatibility alias only.
+It is intentionally not an agent. It does not generate search terms, call OpenAI, scrape live sites, or fall back to alternate providers at runtime. Callers must send explicit search terms, and the service queries the scraper Postgres database through `ScraperDbClient`.
 
-## Overview
+## Runtime Contract
 
-The Valuer Bridge Backend provides API endpoints for item valuation, price justification, value range analysis, auction result searches, and enhanced statistical analysis for antiques and collectibles. Search requests always read from Appraisily's scraper database through `ScraperDbClient`; there is no live provider mode, provider auto-selection, cookie-backed scraping path, or direct upstream Valuer fallback.
+### `GET /health`
 
-## Core Technologies
+Returns service readiness and the active provider.
 
-- **Node.js/Express**: Backend framework
-- **TypeScript**: Type-safe JavaScript
-- **OpenAI API**: For AI-powered valuation and analysis
-- **Postgres scraper DB**: Required source for auction lots
-- **RabbitMQ**: Internal messaging and audit event fan-out
-- **Local filesystem storage**: Archives request/response payloads for debugging
-- **Docker**: For containerization and deployment
-
-## Installation and Setup
-
-```bash
-# Clone the repository
-git clone <repository-url>
-
-# Install dependencies
-npm install
-
-# Development mode
-npm run dev
-
-# Build for production
-npm run build
-
-# Start production server
-npm start
-```
-
-## Environment Governance
-
-- Run `npm run env:check` (delegates to `repos/env-governance/schemas/services/valuer-agent.json`) before `npm run dev`, `npm run build`, or deployment.
-- Required:
-  - `OPENAI_API_KEY` – the service refuses to start without an AI key.
-  - `SCRAPER_DB_URL` or `SCRAPER_DATABASE_URL` – Postgres connection string for the scraper database.
-- Optional but commonly configured:
-  - **Scraper DB tuning** – `SCRAPER_DB_POOL_SIZE`, `SCRAPER_DB_QUERY_TIMEOUT_MS`, `SCRAPER_DB_CONCURRENCY`, `SCRAPER_DB_SSL`, optional `PUBLIC_ASSETS_BASE_URL` (defaults to `https://assets.appraisily.com` for lot thumbnails).
-  - **Messaging** – `MESSAGE_TRANSPORT`/`MESSAGE_BROKER_URL`/`MESSAGE_EXCHANGE`/`MESSAGE_ROUTING_KEY` (set `MESSAGE_TRANSPORT=none` to disable fan-out).
-  - **Archiving** – `VALUER_ARCHIVE_RESPONSES`, `VALUER_ARCHIVE_PREFIX`, local storage knobs (`LOCAL_STORAGE_ROOT`, `LOCAL_STORAGE_BUCKET`, `LOCAL_STORAGE_BASE_URL`).
-  - **Batch controls** – `VALUER_BATCH_CONCURRENCY`, `VALUER_BATCH_HTTP_TIMEOUT_MS`, `VALUER_EARLY_STOP_AT`.
-  - **Thumbnail publishing** – `SCRAPPER_INTERNAL_API_KEY`, `SCRAPPER_THUMBS_PUBLISH_URL`, `SCRAPPER_THUMBS_PUBLISH_TIMEOUT_MS`, `SCRAPPER_THUMBS_PUBLISH_CONCURRENCY`, `SCRAPER_DB_PUBLISH_THUMBS_DISABLED`, `SCRAPER_DB_PUBLISH_THUMBS_LIMIT`.
-  - **Miscellaneous** – `PORT`, `SAVE_VALUER_RESPONSES`, `PROVIDED_TIER_SPLIT`, `VALUER_JUSTIFY_*`, `VALUER_MIN_PRICE_DEFAULT`, etc.
-
-The schema captures every supported flag so env-check output stays authoritative. Do not add provider/cookie/live-scrape env flags back to this service.
-
-## File Structure
-
-```
-/
-├── dist/                # Compiled output
-├── src/
-│   ├── server.ts        # Main Express server setup
-│   ├── services/        # Core service modules
-│   │   ├── justifier-agent.ts      # Valuation justification agent
-│   │   ├── keyword-extraction.service.ts # Keyword extraction for searches
-│   │   ├── market-data-aggregator.service.ts # Aggregates market data
-│   │   ├── market-data.ts          # Market data fetching service
-│   │   ├── market-report.service.ts # Market report generation
-│   │   ├── statistical-analysis.service.ts # Statistical analysis
-│   │   ├── statistics-service.ts   # Enhanced statistics service
-│   │   ├── types.ts                # Type definitions
-│   │   ├── valuer.ts               # Core valuation service
-│   │   ├── prompts/               # AI prompts
-│   │   └── utils/                 # Utility functions
-│   ├── tests/           # Test files
-├── Dockerfile           # Docker configuration
-├── tsconfig.json        # TypeScript configuration
-└── package.json         # Project dependencies and scripts
-```
-
-## Core Classes
-
-### ValuerService
-
-The primary service for interfacing with the scraper database.
-
-**Key Methods:**
-- `search(query: string, minPrice?: number, maxPrice?: number, limit?: number)`: Searches auction database with filters
-- `findValuableResults(keyword: string, minPrice: number, limit: number)`: Finds valuable auction results with refinement logic
-- `findSimilarItems(description: string, targetValue?: number)`: Finds items similar to a description
-
-### JustifierAgent
-
-An AI-powered agent for justifying valuations and finding value ranges.
-
-**Key Methods:**
-- `justify(text: string, value: number)`: Justifies a valuation against market data
-- `findValue(text: string)`: Determines a value for an item based on its description
-- `findValueRange(text: string, useAccurateModel: boolean)`: Finds a value range with confidence levels
-
-### StatisticsService
-
-Generates enhanced statistical analysis of market data.
-
-**Key Methods:**
-- `generateStatistics(text: string, value: number, targetCount: number, minPrice?: number, maxPrice?: number)`: Creates comprehensive statistical analysis
-
-### MarketDataService
-
-Retrieves and processes market data for analysis.
-
-**Key Methods:**
-- `searchMarketData(searchTerms: string[], targetValue?: number, isForJustification?: boolean, minRelevance?: number)`: Executes multiple searches and aggregates results
-
-## API Endpoints
-
-### POST /api/justify [Deprecated]
-This endpoint is deprecated. Use `POST /api/multi-search` with `{ justify: true, targetValue }` for combined search + justification and a structured summary.
-
-Justifies a valuation based on item description and proposed value.
-
-**Request Schema:**
 ```json
 {
-  "text": "string",
-  "value": "number"
+  "status": "ok",
+  "service": "valuer-bridge",
+  "provider": "scraper_db",
+  "dbConfigured": true
 }
 ```
 
-**Response:**
+### `POST /v2/search/batch`
+
+Canonical search endpoint. It accepts caller-owned term tiers and returns per-query lots plus a deduped compact lot list.
+
 ```json
 {
-  "success": true,
-  "explanation": "string",
-  "auctionResults": [...],
-  "allSearchResults": [...]
-}
-```
-
-### POST /api/multi-search (with justification)
-Performs concurrent DB-backed term searches. When called with `justify:true` and a `targetValue`, it narrows the price band and returns a `summary` including `{ minValue, maxValue, mostLikelyValue, supportLevel?, comparableItems[] }`.
-
-Notes (current deployment behavior):
-- `terms` is required. This service does not generate search terms when `terms` is missing/empty. Upstream callers (e.g., web‑services) own term generation and grouping.
-- `description` may be an empty string when `terms` are provided — this is expected.
-- Concurrency is honored per batch (typically 3). There is no hard early‑stop by default; you can cap total unique lots with the request field `maxItems` or the env `VALUER_EARLY_STOP_AT` (> 0). If neither is set, the service will collect up to the natural maximum (e.g., queries × per‑query limit).
-- Results come from the scraper database only. The response includes `provider: "scraper_db"` on the lower-level batch envelope.
-
-Example request (preferred):
-```json
-{
-  "description": "",
-  "terms": [
-    "surrealist color lithograph tents",
-    "limited edition lithograph red tents",
-    "desert surreal scene print",
-    "attenuated figures surreal lithograph",
-    "pyramidal tents modern print",
-    "European surrealist lithograph"
-  ],
-  "limitPerQuery": 100,
-  "concurrency": 3
-}
-```
-
-Error response when `terms` missing/empty:
-```json
-{
-  "success": false,
-  "error": "terms_required",
-  "message": "Provide non-empty terms[]; term generation is disabled in this deployment."
-}
-```
-
-### POST /v2/search/batch (preferred)
-Structured, versioned contract for multi-term search. Caller provides tiered terms and pricing; the service executes batches respecting caller ordering and returns the accepted plan and per-query results.
-
-Request headers:
-- `X-Correlation-Id`: optional correlation identifier echoed back
-- `Idempotency-Key`: optional key to deduplicate retries
-
-Request body schema (TypeScript/Zod equivalent):
-```jsonc
-{
-  "schemaVersion": "2.0", // optional, defaults "2.0"
+  "schemaVersion": "2.0",
   "context": {
-    "sessionId": "string?",
-    "appraisalId": "string?",
-    "target": "professional" | "screener",
-    "rev": "string?" // arbitrary caller revision tag
+    "target": "screener",
+    "rev": "appraisily-pro-mcp"
   },
   "pricing": {
-    "min": 100,          // WS-owned effective min price
-    "max": 2000,         // optional WS-owned effective max price
-    "reference": 800,    // optional appraiser reference value (echoed; used in summaries)
-    "justify": true      // whether banding is intended
+    "min": 250,
+    "max": 20000,
+    "reference": 2500,
+    "justify": false
   },
   "limits": {
-    "perTerm": 100,      // per-query lot limit
-    "total": 21,         // optional total query cap across tiers
-    "timeoutMs": 150000, // optional batch timeout
-    "retries": 3         // optional retry attempts
+    "perTerm": 20,
+    "timeoutMs": 45000,
+    "retries": 1
   },
   "options": {
-    "tierSplit": "provided", // must be "provided"; service won’t re-tier
     "concurrency": 3,
     "sort": "relevance"
   },
   "terms": {
-    "very_specific": ["Laszlo De Nagy oil painting", "Truro Lighthouse oil on board"],
-    "specific": ["oil on board lighthouse", "coastal dunes oil painting"],
-    "moderate": ["oil landscape"],
-    "flattened": [/* very_specific + specific + moderate ordered */]
+    "very_specific": ["Chihuly Macchia bowl"],
+    "specific": ["Chihuly art glass bowl"],
+    "moderate": ["studio glass bowl"],
+    "flattened": ["Chihuly Macchia bowl", "Chihuly art glass bowl", "studio glass bowl"]
   }
 }
 ```
 
-Response:
-```json
-{
-  "success": true,
-  "correlationId": "...",
-  "acceptedPlan": { "very_specific": 9, "specific": 9, "moderate": 3, "total": 21 },
-  "used": {
-    "queries": [ { "term": "...", "tier": "very specific" }, { "term": "...", "tier": "specific" } ],
-    "pricing": { "min": 325, "max": 1300, "reference": 800, "justify": true }
-  },
-  "data": { "byQuery": [ /* per-query results with lots */ ] },
-  "batch": { "total": 9, "completed": 9, "failed": 0 },
-  "summary": { "totalItems": 468, "uniqueLots": 448, "durationMs": 20817 },
-  "meta": { "schemaVersion": "2.0", "context": { /* echoed */ } }
-}
-```
+Important behavior:
 
-Notes:
-- The service does not alter tier assignment when `terms` are provided. Ordering is preserved.
-- Pricing min/max is taken as-is from the request; no implicit banding is applied server-side.
-- Exactly one underlying Valuer `/api/search/batch` call is executed per request across all tiers (no per-tier batching).
-- Concurrency applies across the combined set of queries (best-effort, capped by `concurrency`).
+- `terms` must contain at least one non-empty term.
+- The service never creates terms from `description` or image data.
+- `pricing.min` defaults to `VALUER_MIN_PRICE_DEFAULT` or `250`.
+- `limits.perTerm` is capped at `200`.
+- `options.concurrency` is capped at `10`.
+- The provider is always `scraper_db`.
 
-### POST /api/find-value
-Determines a value for an item based on its description.
+## Removed Endpoints
 
-**Request Schema:**
-```json
-{
-  "text": "string"
-}
-```
+The old valuation and compatibility routes now return `410 endpoint_removed` with `replacement: "/v2/search/batch"`:
 
-**Response:**
-```json
-{
-  "success": true,
-  "value": "number",
-  "explanation": "string"
-}
-```
+- `POST /api/justify`
+- `POST /api/find-value`
+- `POST /api/find-value-range`
+- `POST /api/auction-results`
+- `POST /api/wp2hugo-auction-results`
+- `POST /api/multi-search`
+- `POST /api/enhanced-statistics`
 
-### POST /api/find-value-range
-Finds a value range with confidence levels.
+## Environment
 
-**Request Schema:**
-```json
-{
-  "text": "string",
-  "useAccurateModel": "boolean" (optional)
-}
-```
+Required:
 
-**Response:**
-```json
-{
-  "success": true,
-  "minValue": "number",
-  "maxValue": "number",
-  "mostLikelyValue": "number",
-  "explanation": "string",
-  "auctionResults": [...],
-  "confidenceLevel": "number",
-  "marketTrend": "rising|stable|declining",
-  "keyFactors": [...],
-  "dataQuality": "high|medium|low"
-}
-```
+- `SCRAPER_DB_URL`
 
-### POST /api/auction-results
-Retrieves auction results for a keyword.
+Optional:
 
-**Request Schema:**
-```json
-{
-  "keyword": "string",
-  "minPrice": "number" (optional),
-  "limit": "number" (optional)
-}
-```
+- `PORT`
+- `CORS_ALLOWED_ORIGINS`
+- `SCRAPER_DATABASE_URL` / `SCRAPER_DB_CONNECTION_STRING` as scraper DB connection-string aliases
+- `SCRAPER_DB_SSL`
+- `SCRAPER_DB_POOL_SIZE`
+- `SCRAPER_DB_QUERY_TIMEOUT_MS`
+- `SCRAPER_DB_CONCURRENCY`
+- `VALUER_BATCH_CONCURRENCY`
+- `VALUER_BATCH_HTTP_TIMEOUT_MS`
+- `VALUER_MIN_PRICE_DEFAULT`
+- `SCRAPPER_INTERNAL_API_KEY`
+- `SCRAPPER_THUMBS_PUBLISH_URL`
+- `SCRAPPER_THUMBS_PUBLISH_CONCURRENCY`
+- `SCRAPPER_THUMBS_PUBLISH_TIMEOUT_MS`
+- `SCRAPER_DB_PUBLISH_THUMBS_DISABLED`
+- `SCRAPER_DB_PUBLISH_THUMBS_LIMIT`
+- `LOCAL_STORAGE_*`, `PUBLIC_ASSETS_BASE_URL`, `PUBLIC_STORAGE_ROOT`
+- `MESSAGE_*`
+- `VALUER_ARCHIVE_RESPONSES`, `VALUER_ARCHIVE_PREFIX`
 
-**Response:**
-```json
-{
-  "success": true,
-  "keyword": "string",
-  "totalResults": "number",
-  "minPrice": "number",
-  "auctionResults": [...]
-}
-```
-
-### POST /api/wp2hugo-auction-results
-Retrieves auction results in WordPress-Hugo compatible format.
-
-**Request Schema:**
-```json
-{
-  "keyword": "string",
-  "minPrice": "number" (optional),
-  "limit": "number" (optional)
-}
-```
-
-**Response:**
-```json
-{
-  "success": true,
-  "keyword": "string",
-  "totalResults": "number",
-  "minPrice": "number",
-  "auctionResults": [...],
-  "summary": "string",
-  "priceRange": {
-    "min": "number",
-    "max": "number",
-    "median": "number"
-  },
-  "timestamp": "string"
-}
-```
-
-### POST /api/enhanced-statistics
-Generates comprehensive statistical analysis of market data.
-
-**Request Schema:**
-```json
-{
-  "text": "string",
-  "value": "number",
-  "limit": "number" (optional),
-  "targetCount": "number" (optional),
-  "minPrice": "number" (optional),
-  "maxPrice": "number" (optional)
-}
-```
-
-**Response:**
-```json
-{
-  "success": true,
-  "statistics": {
-    "count": "number",
-    "average_price": "number",
-    "median_price": "number",
-    "price_min": "number",
-    "price_max": "number",
-    "standard_deviation": "number",
-    "coefficient_of_variation": "number",
-    "percentile": "string",
-    "confidence_level": "string",
-    "price_trend_percentage": "string",
-    "histogram": [...],
-    "comparable_sales": [...],
-    "value": "number",
-    "target_marker_position": "number",
-    "total_count": "number",
-    "price_history": [...],
-    "historical_significance": "number",
-    "investment_potential": "number",
-    "provenance_strength": "number",
-    "data_quality": "string"
-  },
-  "message": "string"
-}
-```
-
-## Type Definitions
-
-### AuctionItemWithRelevance
-```typescript
-interface AuctionItemWithRelevance {
-  title: string;
-  price: number;
-  currency: string;
-  house: string;
-  date: string;
-  description?: string;
-  diff?: string;
-  is_current?: boolean;
-  relevanceScore?: number;
-  adjustmentFactor?: number;
-  relevanceReason?: string;
-}
-```
-
-### EnhancedStatistics
-```typescript
-interface EnhancedStatistics {
-  count: number;
-  average_price: number;
-  median_price: number;
-  price_min: number;
-  price_max: number;
-  standard_deviation: number;
-  coefficient_of_variation: number;
-  percentile: string;
-  confidence_level: string;
-  price_trend_percentage: string;
-  histogram: HistogramBucket[];
-  comparable_sales: FormattedAuctionItem[];
-  value: number;
-  target_marker_position: number;
-  total_count?: number;
-  price_history: PriceHistoryPoint[];
-  historical_significance: number;
-  investment_potential: number;
-  provenance_strength: number;
-  data_quality?: string;
-}
-```
-
-### ValueRangeResponse
-```typescript
-interface ValueRangeResponse {
-  minValue: number;
-  maxValue: number;
-  mostLikelyValue: number;
-  explanation: string;
-  auctionResults: AuctionItemWithRelevance[];
-  confidenceLevel: number;
-  marketTrend: 'rising' | 'stable' | 'declining';
-  keyFactors?: string[];
-  dataQuality?: 'high' | 'medium' | 'low';
-}
-```
-
-## Processing Flow
-
-1. **API Request Handling**: Express routes receive client requests and validate using Zod schemas
-2. **Secret Management**: OpenAI and scraper DB credentials come from approved runtime stores
-3. **Keyword Ownership**: `/api/multi-search` and `/v2/search/batch` require caller-provided terms; upstream services own term planning
-4. **Market Data Retrieval**: `ValuerService` fetches auction results from the scraper DB only
-5. **Data Analysis**: 
-   - JustifierAgent analyzes market data and generates value justifications
-   - StatisticsService calculates comprehensive market statistics
-6. **Error Handling**: Structured error handling with appropriate HTTP status codes
-
-## Smoke Checks
-
-After deploying a new Valuer Bridge image, run:
+## Checks
 
 ```bash
-npm run smoke
+npm run test
+npm run lint
+npm run build
+VALUER_BRIDGE_BASE_URL=http://127.0.0.1:8113 npm run smoke
 ```
 
-The smoke checks verify:
-- `/health` reports `service: "valuer-bridge"`, `provider: "scraper_db"`, and `dbConfigured: true`
-- `/v2/search/batch` returns at least one scraper DB lot
-- `/api/multi-search` still works as the flat-term compatibility endpoint
-- `/api/multi-search` rejects missing `terms[]` with `terms_required`
-
-Set `VALUER_BRIDGE_BASE_URL` or `BASE_URL` to target a non-default host.
-
-## Deployment
-
-The application is containerized using Docker and deployed through the VPS Compose flow, not Cloud Run. Build the image from this repo path but tag the runtime image as Valuer Bridge:
+Deploy smoke:
 
 ```bash
-docker build -t localhost:5000/app/valuer-bridge:prod-<stamp>-<sha> -f Dockerfile /srv/repos
+npm run smoke:deploy -- --base https://valuer-bridge.appraisily.com --container valuer-bridge
 ```
 
-Use the Compose overlay at `/srv/infrastructure/vps-infra/compose/appraisily/runtime/docker-compose/valuer-agent/`. The overlay directory name remains legacy for now; the service/container/router names should use `valuer-bridge`.
+The deploy smoke is wired into the VPS deploy helper. Candidate deploys run the HTTP contract against the temporary container before promotion. Live deploys additionally assert the container runtime env has `SCRAPER_DB_URL`, does not have legacy/AI/fallback env names, and has no recent blocking log errors.
 
-## Error Handling
+For runtime env schema validation:
 
-The application uses Express middleware for centralized error handling:
-- Zod validation errors return 400 Bad Request
-- API errors use appropriate HTTP status codes
-- All errors include structured JSON response with error details
-
-## Security
-
-- API keys and DB credentials come from Vault or approved runtime stores, not code
-- Input validation on all endpoints using Zod schemas
-- Express security best practices including proper error handling
-
-## Development Workflow
-
-1. Make changes to TypeScript files in the `src` directory
-2. Run tests: `npm test`
-3. Build: `npm run build`
-4. Deploy: Push to the deployment branch to trigger CI/CD
+```bash
+ENV_GOV_ENV_FILE=/srv/infrastructure/vps-infra/compose/appraisily/runtime/docker-compose/valuer-agent/runtime.env npm run env:check
+```
