@@ -6,13 +6,20 @@ function argValue(name) {
   return process.argv[index + 1] || null;
 }
 
+function numberArg(name, fallback) {
+  const raw = argValue(name) ?? process.env[name.replace(/^--/, '').replace(/-/g, '_').toUpperCase()];
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 const baseUrl = (
   argValue('--base') ||
   process.env.BASE_URL ||
   process.env.VALUER_BRIDGE_BASE_URL ||
   'http://127.0.0.1:8113'
 ).replace(/\/+$/, '');
-const timeoutMs = Number(process.env.SMOKE_TIMEOUT_MS || 45_000);
+const timeoutMs = numberArg('--timeout-ms', Number(process.env.SMOKE_TIMEOUT_MS || 45_000));
+const attempts = Math.max(1, Math.floor(numberArg('--attempts', Number(process.env.SMOKE_ATTEMPTS || 1))));
 
 function fail(message, details) {
   console.error(`[smoke] FAIL: ${message}`);
@@ -26,12 +33,20 @@ function assert(condition, message, details) {
   if (!condition) fail(message, details);
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function request(path, options = {}) {
+  const requestTimeoutMs = Number.isFinite(options.timeoutMs) && options.timeoutMs > 0
+    ? Number(options.timeoutMs)
+    : timeoutMs;
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(new Error(`timeout_after_${timeoutMs}ms`)), timeoutMs);
+  const timeout = setTimeout(() => controller.abort(new Error(`timeout_after_${requestTimeoutMs}ms`)), requestTimeoutMs);
   try {
+    const { timeoutMs: _ignoredTimeout, ...fetchOptions } = options;
     const res = await fetch(`${baseUrl}${path}`, {
-      ...options,
+      ...fetchOptions,
       headers: {
         accept: 'application/json',
         ...(options.body ? { 'content-type': 'application/json' } : {}),
@@ -50,6 +65,32 @@ async function request(path, options = {}) {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+async function waitForHealth() {
+  const healthTimeoutMs = Math.min(timeoutMs, 5_000);
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      const health = await request('/health', { timeoutMs: healthTimeoutMs });
+      if (health.ok) return health;
+      lastError = health;
+    } catch (err) {
+      lastError = err;
+    }
+
+    if (attempt < attempts) {
+      const detail = lastError instanceof Error ? lastError.message : `status_${lastError?.status || 'unknown'}`;
+      console.warn(`[smoke] health attempt ${attempt}/${attempts} not ready: ${detail}`);
+      await sleep(1_000);
+    }
+  }
+
+  if (lastError instanceof Error) {
+    fail('/health should return 2xx', lastError.message);
+  }
+  fail('/health should return 2xx', lastError);
 }
 
 function bodyContainsForbiddenProvider(json) {
@@ -85,20 +126,9 @@ const batchPayload = {
   },
 };
 
-const multiSearchPayload = {
-  description: 'Dale Chihuly Macchia blown glass bowl',
-  terms: ['Chihuly Macchia bowl'],
-  minPrice: 100,
-  maxPrice: 20_000,
-  limitPerQuery: 3,
-  concurrency: 1,
-  skipSummary: true,
-  maxItems: 3,
-};
-
 console.log(`[smoke] baseUrl=${baseUrl}`);
 
-const health = await request('/health');
+const health = await waitForHealth();
 assert(health.ok, '/health should return 2xx', health);
 assert(health.json?.status === 'ok', '/health should report status ok', health.json);
 assert(health.json?.service === 'valuer-bridge', '/health should identify valuer-bridge', health.json);
@@ -117,22 +147,33 @@ assert(Number(batch.json?.summary?.totalItems || 0) > 0, '/v2/search/batch shoul
 assert(!bodyContainsForbiddenProvider(batch.json), '/v2/search/batch should not expose live/auto provider behavior', batch.json);
 console.log(`[smoke] v2 batch ok (${batch.json.summary.totalItems} items)`);
 
-const multi = await request('/api/multi-search', {
+const missingTerms = await request('/v2/search/batch', {
   method: 'POST',
-  body: JSON.stringify(multiSearchPayload),
+  body: JSON.stringify({
+    schemaVersion: '2.0',
+    terms: {},
+  }),
 });
-assert(multi.ok, '/api/multi-search should return 2xx', multi);
-assert(multi.json?.success === true, '/api/multi-search should succeed', multi.json);
-assert(Number(multi.json?.stats?.totalLots || 0) > 0, '/api/multi-search should return at least one lot', multi.json?.stats);
-assert(!bodyContainsForbiddenProvider(multi.json), '/api/multi-search should not expose live/auto provider behavior', multi.json);
-console.log(`[smoke] multi-search ok (${multi.json.stats.totalLots} lots)`);
-
-const missingTerms = await request('/api/multi-search', {
-  method: 'POST',
-  body: JSON.stringify({ description: 'Dale Chihuly Macchia blown glass bowl', terms: [] }),
-});
-assert(missingTerms.status === 400, '/api/multi-search missing terms should return 400', missingTerms);
-assert(missingTerms.json?.error === 'terms_required', '/api/multi-search missing terms should return terms_required', missingTerms.json);
+assert(missingTerms.status === 400, '/v2/search/batch missing terms should return 400', missingTerms);
+assert(missingTerms.json?.error === 'terms_required', '/v2/search/batch missing terms should return terms_required', missingTerms.json);
 console.log('[smoke] missing-terms negative check ok');
+
+for (const endpoint of [
+  '/api/justify',
+  '/api/find-value',
+  '/api/find-value-range',
+  '/api/auction-results',
+  '/api/wp2hugo-auction-results',
+  '/api/multi-search',
+  '/api/enhanced-statistics',
+]) {
+  const removed = await request(endpoint, {
+    method: 'POST',
+    body: JSON.stringify({ terms: ['Chihuly Macchia bowl'], keyword: 'Chihuly Macchia bowl' }),
+  });
+  assert(removed.status === 410, `${endpoint} should return 410`, removed);
+  assert(removed.json?.error === 'endpoint_removed', `${endpoint} should return endpoint_removed`, removed.json);
+}
+console.log('[smoke] removed endpoint checks ok');
 
 console.log('[smoke] PASS');

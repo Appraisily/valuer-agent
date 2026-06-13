@@ -1,21 +1,44 @@
 import express, { Request, Response, NextFunction } from 'express';
 import type { RequestHandler } from 'express';
 import { z, ZodError } from 'zod';
-import OpenAI from 'openai';
+import { createRequire } from 'node:module';
 import { ValuerService } from './services/valuer.js';
-import { JustifierAgent } from './services/justifier-agent.js';
-import { StatisticsService } from './services/statistics-service.js';
-import { callOpenAIAndParseJson } from './services/utils/openai-helper.js';
 import { archiveJSON, storageEnabled } from './services/utils/local-storage.js';
 import { messagingEnabled, publishEvent, closeBroker } from './services/utils/messaging.js';
-import { createRequire } from 'module';
 
-async function getOpenAIKey() {
-  const key = (process.env.OPENAI_API_KEY || '').trim();
-  if (!key) throw new Error('OPENAI_API_KEY is required');
-  console.log('Using OPENAI_API_KEY from environment variables');
-  return key;
-}
+type CompactLot = {
+  id?: string;
+  lot_uid?: string;
+  lotId?: string;
+  title?: string;
+  price?: { amount?: number; currency?: string; symbol?: string };
+  auctionHouse?: string;
+  date?: string;
+  url?: string;
+  thumbUrl?: string;
+  imageUrl?: string;
+  originalUrl?: string;
+  imageOriginalUrl?: string;
+  imagePath?: string;
+  imageFileName?: string;
+};
+
+type TermWithTier = { term: string; tier: string };
+
+const shouldArchiveResponses = String(process.env.VALUER_ARCHIVE_RESPONSES ?? process.env.SAVE_VALUER_RESPONSES ?? 'false').toLowerCase() === 'true';
+const archivePrefix = process.env.VALUER_ARCHIVE_PREFIX ?? 'valuer-bridge/responses';
+const eventRoutingKey = process.env.MESSAGE_ROUTING_KEY ?? 'valuer.http.completed';
+
+const valuer = new ValuerService();
+const app = express();
+const require = createRequire(import.meta.url);
+type CorsModule = { createCorsMiddleware: (options?: Record<string, unknown>) => RequestHandler };
+const { createCorsMiddleware } = require('../../_shared/cors') as CorsModule;
+const corsMiddleware = createCorsMiddleware({ logger: console });
+
+app.use(corsMiddleware);
+app.options('*', corsMiddleware);
+app.use(express.json());
 
 function safeClone<T>(input: T): T | undefined {
   if (input === null || typeof input === 'undefined') return input as T | undefined;
@@ -34,12 +57,7 @@ function comparableDedupeKey(lot: any, title: string): string {
   return `title:${String(title || '').trim().toLowerCase()}`;
 }
 
-function comparableImageFields(lot: any): {
-  thumbUrl?: string;
-  imageUrl?: string;
-  originalUrl?: string;
-  imageOriginalUrl?: string;
-} {
+function comparableImageFields(lot: any): Pick<CompactLot, 'thumbUrl' | 'imageUrl' | 'originalUrl' | 'imageOriginalUrl'> {
   const thumbUrl = lot?.thumbUrl || lot?.thumbnail || lot?.thumb || lot?.smallImage || lot?.imageUrl || lot?.image;
   const imageUrl = lot?.imageUrl || lot?.mediumUrl || lot?.image || thumbUrl;
   const originalUrl = lot?.originalUrl || lot?.imageOriginalUrl || lot?.fullUrl || imageUrl;
@@ -51,647 +69,26 @@ function comparableImageFields(lot: any): {
   };
 }
 
-const shouldArchiveResponses = String(process.env.VALUER_ARCHIVE_RESPONSES ?? process.env.SAVE_VALUER_RESPONSES ?? 'false').toLowerCase() === 'true';
-const archivePrefix = process.env.VALUER_ARCHIVE_PREFIX ?? 'valuer-bridge/responses';
-const eventRoutingKey = process.env.MESSAGE_ROUTING_KEY ?? 'valuer.http.completed';
-
-const app = express();
-const require = createRequire(import.meta.url);
-type CorsModule = { createCorsMiddleware: (options?: Record<string, unknown>) => RequestHandler };
-const { createCorsMiddleware } = require('../../_shared/cors') as CorsModule;
-const corsMiddleware = createCorsMiddleware({ logger: console });
-app.use(corsMiddleware);
-app.options('*', corsMiddleware);
-app.use(express.json());
-
-app.get('/health', (_req: Request, res: Response) => {
-  res.status(200).json({
-    status: 'ok',
-    service: 'valuer-bridge',
-    ...valuer.getReadiness(),
-  });
-});
-
-// Structured HTTP request logs (start/end with durationMs)
-app.use((req: Request, res: Response, next: NextFunction) => {
-  try {
-    const start = Date.now();
-    const inbound = req.header('X-Correlation-Id') || req.header('X-Request-Id');
-    const requestId = inbound || (globalThis.crypto?.randomUUID?.() || Math.random().toString(36).slice(2));
-    try { res.setHeader('x-request-id', requestId); } catch {}
-    (res.locals as Record<string, unknown>).requestId = requestId;
-    const capturedBody = typeof req.body === 'object' && req.body !== null ? safeClone(req.body) : req.body;
-    (res.locals as Record<string, unknown>).requestBody = capturedBody;
-
-    const originalJson = res.json.bind(res);
-    res.json = ((body: any) => {
-      (res.locals as Record<string, unknown>).responseBody = body;
-      return originalJson(body);
-    }) as typeof res.json;
-
-    const meta: Record<string, unknown> = {
-      requestId,
-      correlationId: requestId,
-      method: req.method,
-      url: req.originalUrl,
-      ip: (req as any).ip,
-      userAgent: req.get('user-agent') || '',
-    };
-    // Log as JSON so Cloud Logging can parse structure
-    console.log(JSON.stringify({ ts: new Date().toISOString(), level: 'info', context: 'HTTP', msg: 'request:start', ...meta }));
-    res.on('finish', () => {
-      console.log(JSON.stringify({ ts: new Date().toISOString(), level: 'info', context: 'HTTP', msg: 'request:end', ...meta, status: res.statusCode, durationMs: Date.now() - start }));
-      const summary = {
-        ...meta,
-        status: res.statusCode,
-        durationMs: Date.now() - start,
-        timestamp: new Date().toISOString()
-      };
-
-      if (messagingEnabled) {
-        publishEvent(eventRoutingKey, summary, {
-          'x-request-id': String(requestId),
-          'x-service': 'valuer-bridge'
-        }).catch((err: unknown) => {
-          console.warn('[valuer-bridge] Failed to publish request event:', (err as Error)?.message ?? err);
-        });
-      }
-
-      if (shouldArchiveResponses && storageEnabled) {
-        const payload = {
-          ...summary,
-          request: {
-            query: req.query,
-            body: capturedBody
-          },
-          response: (res.locals as Record<string, unknown>).responseBody
-        };
-        archiveJSON(archivePrefix, payload).catch((err: unknown) => {
-          console.warn('[valuer-bridge] Failed to archive response payload:', (err as Error)?.message ?? err);
-        });
-      }
-    });
-  } catch {}
-  next();
-});
-
-let openai: OpenAI;
-let justifier: JustifierAgent;
-let statistics: StatisticsService;
-const valuer = new ValuerService();
-
-// Initialize OpenAI client with secret
-async function initializeOpenAI() {
-  const apiKey = await getOpenAIKey();
-  openai = new OpenAI({ apiKey });
-  justifier = new JustifierAgent(openai, valuer);
-  statistics = new StatisticsService(openai, valuer);
+function uniqueTerms(input: unknown): string[] {
+  if (!Array.isArray(input)) return [];
+  return Array.from(new Set(input.map(String).map((term) => term.trim()).filter(Boolean)));
 }
 
-const RequestSchema = z.object({
-  text: z.string(),
-  value: z.number(),
-});
-
-const FindValueRequestSchema = z.object({
-  text: z.string(),
-  useAccurateModel: z.boolean().optional(),
-});
-
-const AuctionResultsRequestSchema = z.object({
-  keyword: z.string(),
-  minPrice: z.number().optional(),
-  limit: z.number().optional(),
-});
-
-const EnhancedStatisticsRequestSchema = z.object({
-  text: z.string(),
-  value: z.number(),
-  limit: z.number().optional(),
-  targetCount: z.number().optional(),
-  minPrice: z.number().optional(),
-  maxPrice: z.number().optional(),
-});
-
-// Middleware to check if essential services are initialized
-const checkServicesInitialized = (_req: Request, _res: Response, next: NextFunction) => {
-  if (!openai || !justifier || !statistics) {
-    // Use next(error) to pass control to the error handling middleware
-    return next(new Error('Core services not initialized'));
-  }
-  next(); // Services are initialized, proceed to the next middleware/route handler
-};
-
-// Shared function to process auction results
-async function processAuctionResults(keyword: string, minPrice: number = 1000, limit: number = 10, format: 'standard' | 'wp2hugo' = 'standard') {
-  console.log(`${format === 'wp2hugo' ? 'WP2HUGO' : 'Standard'} auction results request for: "${keyword}" (minPrice: ${minPrice}, limit: ${limit})`);
-  const results = await valuer.findValuableResults(keyword, minPrice, limit);
-
-  // Common processing
-  const hits = results.hits;
-  const prices = hits.map(hit => hit.priceResult).filter(p => p > 0);
-  const minFoundPrice = prices.length > 0 ? Math.min(...prices) : 0;
-  const maxFoundPrice = prices.length > 0 ? Math.max(...prices) : 0;
-
-  let medianPrice = 0;
-  if (prices.length > 0) {
-    const sortedPrices = [...prices].sort((a, b) => a - b);
-    const midIndex = Math.floor(sortedPrices.length / 2);
-    medianPrice = sortedPrices.length % 2 === 0
-      ? (sortedPrices[midIndex - 1] + sortedPrices[midIndex]) / 2
-      : sortedPrices[midIndex];
-  }
-
-  // Format results based on the requested format
-  const auctionResults = hits.map(hit => ({
-    title: hit.lotTitle,
-    price: {
-      amount: hit.priceResult,
-      currency: hit.currencyCode,
-      symbol: hit.currencySymbol
-    },
-    // Use 'house' for wp2hugo format, 'auctionHouse' otherwise (though source data uses houseName)
-    [format === 'wp2hugo' ? 'house' : 'auctionHouse']: hit.houseName,
-    date: hit.dateTimeLocal,
-    lotNumber: hit.lotNumber,
-    saleType: hit.saleType
-  }));
-
-  if (format === 'wp2hugo') {
-    let summary = "";
-    if (auctionResults.length > 0) {
-      const currencyCode = hits[0]?.currencyCode || 'USD';
-      summary = `Based on ${auctionResults.length} recent auction results, ${keyword} typically sell for between ${minFoundPrice} and ${maxFoundPrice} ${currencyCode}, with a median value of approximately ${Math.round(medianPrice)} ${currencyCode}. Prices can vary significantly based on condition, rarity, provenance, and market demand.`;
-    } else {
-      summary = `Limited auction data is available for ${keyword}. Values may vary significantly based on condition, rarity, provenance, and market demand.`;
-    }
-    return {
-      success: true,
-      keyword,
-      totalResults: auctionResults.length,
-      minPrice, // Return the requested minPrice
-      auctionResults,
-      summary,
-      priceRange: {
-        min: minFoundPrice,
-        max: maxFoundPrice,
-        median: medianPrice
-      },
-      timestamp: new Date().toISOString()
-    };
-  } else {
-    // Standard format
-    return {
-      success: true,
-      keyword,
-      totalResults: auctionResults.length,
-      minPrice: minPrice, // Return the requested minPrice
-      auctionResults
-    };
-  }
+function numberOrUndefined(value: unknown): number | undefined {
+  if (value === null || value === undefined) return undefined;
+  if (typeof value === 'string' && value.trim() === '') return undefined;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : undefined;
 }
 
-// Helper function to wrap async route handlers and catch errors
-const asyncHandler = (fn: (req: Request, res: Response, next: NextFunction) => Promise<any>) =>
-  (req: Request, res: Response, next: NextFunction) => {
-    Promise.resolve(fn(req, res, next)).catch(next); // Errors caught here are passed to the error handler
-  };
-
-
-// Apply initialization check middleware to all /api routes that need it
-app.use('/api/justify', checkServicesInitialized);
-app.use('/api/find-value', checkServicesInitialized);
-app.use('/api/find-value-range', checkServicesInitialized);
-app.use('/api/multi-search', checkServicesInitialized);
-app.use('/v2/search/batch', checkServicesInitialized);
-// Note: /api/auction-results and /api/wp2hugo-auction-results only need 'valuer', which is initialized synchronously.
-// Note: /api/enhanced-statistics needs 'statistics' service.
-app.use('/api/enhanced-statistics', checkServicesInitialized);
-
-
-app.post('/api/justify', asyncHandler(async (req, res) => {
-  const mode = String(process.env.VALUER_JUSTIFY_DEPRECATION_MODE || 'notice');
-  if (mode === 'gone') {
-    res.set('Deprecation', 'true');
-    res.set('Link', '</api/multi-search>; rel="alternate"');
-    return res.status(410).json({
-      success: false,
-      error: 'Endpoint deprecated. Use /api/multi-search with { justify: true, targetValue }.',
-      alternative: {
-        endpoint: '/api/multi-search',
-        body: { description: '...', targetValue: 2500, justify: true }
-      }
-    });
-  }
-  // Initialization check is done by middleware
-  // Error handling is done by middleware
-
-  const { text, value } = RequestSchema.parse(req.body);
-  const result = await justifier.justify(text, value);
-  res.set('Deprecation', 'true');
-  res.set('Sunset', 'Fri, 31 Oct 2025 00:00:00 GMT');
-  res.set('Link', '</api/multi-search>; rel="alternate"');
-  console.warn('DEPRECATION: /api/justify is deprecated. Use /api/multi-search with { justify: true, targetValue }');
-  res.json({
-    success: true,
-    deprecation: {
-      message: 'This endpoint is deprecated and will be removed. Use /api/multi-search with { justify: true, targetValue }.',
-      alternative: { endpoint: '/api/multi-search', body: { description: '...', targetValue: value, justify: true } },
-      sunset: '2025-10-31T00:00:00.000Z'
-    },
-    explanation: result.explanation,
-    auctionResults: result.auctionResults,
-    allSearchResults: result.allSearchResults
+function buildSearches(combined: TermWithTier[], minPrice: number, maxPrice: number | undefined, limitPerTerm: number, sort: string) {
+  return combined.map(({ term }) => {
+    const priceResult: Record<string, string> = { min: String(minPrice) };
+    if (typeof maxPrice === 'number') priceResult.max = String(maxPrice);
+    return { query: term, priceResult, limit: limitPerTerm, sort };
   });
-}));
+}
 
-app.post('/api/find-value', asyncHandler(async (req, res) => {
-  // Initialization check is done by middleware
-  // Error handling is done by middleware
-
-  const { text } = FindValueRequestSchema.parse(req.body); // Only text is needed here
-  const result = await justifier.findValue(text);
-
-  res.json({
-    success: true,
-    value: result.value,
-    explanation: result.explanation
-  });
-}));
-
-app.post('/api/find-value-range', asyncHandler(async (req, res) => {
-  // Initialization check is done by middleware
-  // Error handling is done by middleware
-
-  // Use FindValueRequestSchema here as it includes 'text' and 'useAccurateModel'
-  const { text, useAccurateModel } = FindValueRequestSchema.parse(req.body);
-
-  console.log(`Processing find-value-range request for: "${text.substring(0, 100)}..." (useAccurateModel: ${useAccurateModel === true})`);
-
-  const result = await justifier.findValueRange(text, useAccurateModel === true);
-
-  res.json({
-    success: true,
-    minValue: result.minValue,
-    maxValue: result.maxValue,
-    mostLikelyValue: result.mostLikelyValue,
-    explanation: result.explanation,
-    auctionResults: result.auctionResults || [],
-    confidenceLevel: result.confidenceLevel,
-    marketTrend: result.marketTrend,
-    keyFactors: result.keyFactors,
-    dataQuality: result.dataQuality
-  });
-
-  console.log(`Completed find-value-range request with confidence: ${result.confidenceLevel}, trend: ${result.marketTrend}`);
-}));
-
-app.post('/api/auction-results', asyncHandler(async (req, res) => {
-  // Valuer service is initialized synchronously, no async check needed here
-  // Error handling is done by middleware
-  const { keyword, minPrice, limit } = AuctionResultsRequestSchema.parse(req.body);
-  const results = await processAuctionResults(keyword, minPrice, limit, 'standard');
-  res.json(results);
-}));
-
-// Keep the WP2HUGO endpoint separate but use the shared function
-app.post('/api/wp2hugo-auction-results', asyncHandler(async (req, res) => {
-  // Valuer service is initialized synchronously, no async check needed here
-  // Error handling is done by middleware
-  const { keyword, minPrice = 1000, limit = 10 } = AuctionResultsRequestSchema.parse(req.body);
-  const results = await processAuctionResults(keyword, minPrice, limit, 'wp2hugo');
-  res.json(results);
-}));
-
-// New endpoint: multi-search orchestrated via Valuer batch
-const MultiSearchSchema = z.object({
-  description: z.string(),
-  primaryImageUrl: z.string().url().optional(),
-  additionalImageUrls: z.array(z.string().url()).optional(),
-  minPrice: z.number().optional(),
-  maxPrice: z.number().optional(),
-  concurrency: z.number().optional(),
-  limitPerQuery: z.number().optional(),
-  sort: z.string().optional(),
-  timeoutMs: z.number().optional(),
-  retries: z.number().optional(),
-  maxQueries: z.number().optional(),
-  terms: z.array(z.string()).optional(),
-  skipSummary: z.boolean().optional(),
-  maxItems: z.number().optional(),
-  // New: allow passing the appraiser's value to run in justification mode
-  targetValue: z.number().optional(),
-  justify: z.boolean().optional(),
-  // Pyramid controls and structured hints
-  usePyramid: z.boolean().optional(),
-  category: z.string().optional(),
-  maker: z.string().optional(),
-  brand: z.string().optional(),
-  model: z.string().optional(),
-  subject: z.string().optional(),
-  styleEra: z.string().optional(),
-  mediumMaterial: z.string().optional(),
-  region: z.string().optional()
-});
-
-app.post('/api/multi-search', asyncHandler(async (req, res) => {
-  const { description, minPrice, maxPrice, concurrency = Number(process.env.VALUER_BATCH_CONCURRENCY || 5), limitPerQuery = 100, sort = 'relevance', timeoutMs, retries, maxQueries, terms, skipSummary = false, maxItems, targetValue, justify, category } = MultiSearchSchema.parse(req.body);
-
-  // Enforce upstream ownership of term generation: require non-empty terms[]
-  const providedTerms = Array.isArray(terms) ? Array.from(new Set(terms.map(t => String(t).trim()).filter(Boolean))) : [];
-  if (providedTerms.length === 0) {
-    return res.status(400).json({
-      success: false,
-      error: 'terms_required',
-      message: 'Provide non-empty terms[]; term generation is disabled in this deployment.'
-    });
-  }
-
-  // Derive min/max around target when in justification mode
-  const justifyMode = Boolean(justify || (typeof targetValue === 'number' && isFinite(targetValue)));
-  // Use asymmetric band around appraiser value (default: 50%–200%)
-  const bandLow = (() => {
-    const v = Number(process.env.VALUER_JUSTIFY_LOW_FACTOR);
-    if (Number.isFinite(v) && v > 0 && v < 1) return v;
-    return 0.5;
-  })();
-  const bandHigh = (() => {
-    const v = Number(process.env.VALUER_JUSTIFY_HIGH_FACTOR);
-    if (Number.isFinite(v) && v > 1) return v;
-    return 2.0;
-  })();
-  const floorMin = Math.max(0, Number(process.env.VALUER_JUSTIFY_MIN_FLOOR || 100));
-  const effMinPrice = (() => {
-    if (typeof minPrice === 'number') return minPrice;
-    if (justifyMode && typeof targetValue === 'number' && isFinite(targetValue)) {
-      return Math.max(floorMin, Math.floor(targetValue * bandLow));
-    }
-    return Number(process.env.VALUER_MIN_PRICE_DEFAULT || 250);
-  })();
-  const effMaxPrice = (() => {
-    if (typeof maxPrice === 'number') return maxPrice;
-    if (justifyMode && typeof targetValue === 'number' && isFinite(targetValue)) {
-      return Math.ceil(targetValue * bandHigh);
-    }
-    return undefined;
-  })();
-
-  console.log(`Multi-search request: desc len=${description.length}, minPrice=${effMinPrice}${effMaxPrice ? `, maxPrice=${effMaxPrice}` : ''}, concurrency=${concurrency}, justify=${justifyMode}`);
-
-  const selected = providedTerms;
-
-  const perQueryLimit = (() => {
-    const cap = Math.max(1, selected.length || 1);
-    if (typeof maxItems === 'number' && maxItems > 0) {
-      const adaptive = Math.ceil(maxItems / cap);
-      return Math.min(limitPerQuery, Math.max(20, adaptive));
-    }
-    return limitPerQuery;
-  })();
-  // Determine an effective cap for total unique lots, if any.
-  // Priority:
-  // 1) Request `maxItems`
-  // 2) Env `VALUER_EARLY_STOP_AT` (>0)
-  // 3) Otherwise, no cap (Infinity) – allows up to queries*tierLimit (e.g., 6*96)
-  const _envEarlyStop = Number(process.env.VALUER_EARLY_STOP_AT);
-  const HAS_ENV_CAP = Number.isFinite(_envEarlyStop) && _envEarlyStop > 0;
-  const MAX_ITEMS_TOTAL = (typeof maxItems === 'number' && maxItems > 0)
-    ? Math.ceil(maxItems)
-    : (HAS_ENV_CAP ? Math.ceil(_envEarlyStop) : Infinity);
-  const tBatch0 = Date.now();
-  // Aggregate compact items for summarization and UI
-  type CompactItem = {
-    id?: string;
-    lot_uid?: string;
-    lotId?: string;
-    title?: string;
-    price?: { amount?: number; currency?: string };
-    auctionHouse?: string;
-    date?: string;
-    url?: string;
-    thumbUrl?: string;
-    imageUrl?: string;
-    originalUrl?: string;
-    imageOriginalUrl?: string;
-    imagePath?: string;
-    imageFileName?: string;
-  };
-  const uniqueComparableKeys = new Set<string>();
-  let aggregated: CompactItem[] = [];
-  const byQuery: any[] = [];
-  const allExecutedQueries: string[] = [];
-  const cumulativeStats = { total: 0, completed: 0, failed: 0, durationMs: 0 };
-  // Build tiered queries from caller-provided terms. Valuer Bridge does not generate terms.
-  let tiers: Array<{ name: string; terms: string[] }>;
-  const src = selected;
-  const splitEnv = String(process.env.PROVIDED_TIER_SPLIT || 'true').toLowerCase();
-  const splitEnabled = (splitEnv === '1' || splitEnv === 'true' || splitEnv === 'yes');
-  if (splitEnabled && src.length >= 3) {
-    const verySpecific = src.slice(0, 9);
-    const specific = src.slice(9, 18);
-    const broad = src.slice(18, 21);
-    tiers = [];
-    if (verySpecific.length) tiers.push({ name: 'very specific', terms: verySpecific });
-    if (specific.length) tiers.push({ name: 'specific', terms: specific });
-    if (broad.length) tiers.push({ name: 'broad', terms: broad });
-    try {
-      console.log('Tier plan (provided terms):', {
-        verySpecific: verySpecific.length,
-        specific: specific.length,
-        broad: broad.length,
-        total: src.length
-      });
-    } catch (_) {}
-  } else {
-    tiers = [ { name: 'provided', terms: src } ];
-  }
-
-  let remainingBudget = typeof maxQueries === 'number' ? Math.max(1, maxQueries) : Infinity;
-  let capLogged = false;
-  for (let i = 0; i < tiers.length; i++) {
-    const tier = tiers[i];
-    if (remainingBudget <= 0) break;
-    const clean = tier.terms.filter(Boolean);
-    // Try to ensure we execute at least `concurrency` queries per tier when possible,
-    // while not exceeding the remaining overall budget and spreading across tiers.
-    const tiersLeft = (tiers.length - i);
-    const spread = Math.ceil(remainingBudget / Math.max(1, tiersLeft));
-    const desiredForTier = Math.max(concurrency, spread);
-    const takeCount = Math.min(remainingBudget, Math.min(desiredForTier, clean.length));
-    const tierTerms = clean.slice(0, takeCount);
-    if (tierTerms.length === 0) continue;
-
-    // Log the exact queries this tier will execute
-    try {
-      console.log(`Executing tier "${tier.name}" queries: ${tierTerms.join(' | ')}`);
-    } catch (_) {}
-
-    const searchesTier = tierTerms.map(q => {
-      const priceResult: any = { min: String(effMinPrice) };
-      if (typeof effMaxPrice === 'number') priceResult.max = String(effMaxPrice);
-      return ({ query: q, priceResult, limit: perQueryLimit, sort });
-    });
-
-    const t0 = Date.now();
-    const batchTier = await valuer.batchSearch({
-      searches: searchesTier,
-      concurrency: Math.min(concurrency, searchesTier.length),
-      // Fetch ONLY the first page per query
-      fetchAllPages: false
-    }, {
-      timeoutMs: typeof timeoutMs === 'number' ? timeoutMs : Number(process.env.VALUER_BATCH_HTTP_TIMEOUT_MS || 0) || undefined,
-      retry: typeof retries === 'number' ? { attempts: retries } : undefined,
-    });
-    const tierDuration = Date.now() - t0;
-    console.log(`Batch search completed: total=${batchTier?.batch?.total || searchesTier.length}, completed=${batchTier?.batch?.completed || 0}, failed=${batchTier?.batch?.failed || 0}, concurrency=${Math.min(concurrency, searchesTier.length)}, durationMs=${tierDuration}`);
-    cumulativeStats.total += batchTier?.batch?.total || searchesTier.length;
-    cumulativeStats.completed += batchTier?.batch?.completed || 0;
-    cumulativeStats.failed += batchTier?.batch?.failed || 0;
-    cumulativeStats.durationMs += tierDuration;
-
-    allExecutedQueries.push(...tierTerms);
-    remainingBudget = isFinite(remainingBudget) ? Math.max(0, remainingBudget - tierTerms.length) : remainingBudget;
-
-    const preCount = aggregated.length;
-    for (const s of batchTier.searches || []) {
-      const lots = s?.result?.data?.lots || [];
-      const meta = { query: s?.query || '', lotsCount: Array.isArray(lots) ? lots.length : 0, error: s?.error || undefined };
-      for (const lot of lots) {
-        if (Number.isFinite(MAX_ITEMS_TOTAL) && aggregated.length >= MAX_ITEMS_TOTAL) {
-          if (!capLogged) {
-            console.log(`Cap reached at ${MAX_ITEMS_TOTAL} unique lots. Continuing to execute remaining tiers without collecting additional items.`);
-            capLogged = true;
-          }
-          break;
-        }
-        const title: string | undefined = lot?.title || lot?.lotTitle;
-        if (!title) continue;
-        const dedupeKey = comparableDedupeKey(lot, title);
-        if (uniqueComparableKeys.has(dedupeKey)) continue;
-        uniqueComparableKeys.add(dedupeKey);
-        const priceAmount = (lot?.price && typeof lot.price.amount === 'number') ? lot.price.amount : (typeof lot?.priceResult === 'number' ? lot.priceResult : undefined);
-        const currency = lot?.price?.currency || lot?.currency || lot?.currencyCode || 'USD';
-        const imageFields = comparableImageFields(lot);
-        const lotUid: string | undefined = lot?.lot_uid || lot?.lotUid || lot?.id || lot?.lotId;
-        aggregated.push({
-          id: lotUid ? String(lotUid) : undefined,
-          lot_uid: lotUid ? String(lotUid) : undefined,
-          lotId: lotUid ? String(lotUid) : undefined,
-          title,
-          price: priceAmount ? { amount: priceAmount, currency } : undefined,
-          auctionHouse: lot?.auctionHouse || lot?.house || lot?.houseName,
-          date: lot?.date || lot?.dateTimeLocal,
-          url: lot?.url || lot?.lotUrl || lot?.permalink,
-          ...imageFields,
-          imagePath: lot?.imagePath ? String(lot.imagePath) : undefined,
-          imageFileName: lot?.imageFileName ? String(lot.imageFileName) : undefined,
-        });
-      }
-      byQuery.push({ ...s, meta });
-    }
-    const added = aggregated.length - preCount;
-    console.log(`Tier="${tier.name}" contributed ${added} unique lots (total=${aggregated.length})`);
-  }
-
-  // Optional category filtering to reduce cross-domain drift
-  const isFineArt = String(category || '').toLowerCase() === 'fine_art';
-  if (isFineArt && aggregated.length) {
-    const fineArtPattern = /(paint|oil|acrylic|canvas|panel|watercolor|gouache|tempera|lithograph|etch(ing)?|engraving|drawing|print)/i;
-    const bannedPattern = /(coin|dukat|ducat|solidus|brooch|ring|jewelry|jewel|armor|samurai|pen\b|nautilus|shell|diamond|lapis|925\b|silver|gold|map|rookie card)/i;
-    const filtered = aggregated.filter((lot) => {
-      const title = String(lot?.title || '').toLowerCase();
-      if (!title) return false;
-      if (bannedPattern.test(title)) return false;
-      return fineArtPattern.test(title);
-    });
-    if (filtered.length > 0) {
-      console.log(`Applied fine_art filter: reduced lots from ${aggregated.length} to ${filtered.length}`);
-      aggregated = filtered;
-    }
-  }
-
-  // Optional summarization with GPT-5
-  let summary: { minValue: number; maxValue: number; mostLikelyValue: number; comparableItems: CompactItem[] } | null = null;
-  const forceSkipEnv = String(process.env.VALUER_FORCE_SKIP_SUMMARY || '').toLowerCase();
-  const forceSkip = ['1','true','yes','on'].includes(forceSkipEnv);
-  const doSummarize = !skipSummary && !forceSkip;
-  if (doSummarize) {
-    try {
-      const itemsJson = JSON.stringify(aggregated.slice(0, 60).map((it) => ({
-        title: it.title,
-        price: it.price,
-        auctionHouse: it.auctionHouse,
-        date: it.date,
-        url: it.url,
-      })));
-      const summaryPrompt = (() => {
-        if (justifyMode && typeof targetValue === 'number' && isFinite(targetValue)) {
-          return [
-            'You are a valuation assistant. Given comparable auction items and a target appraiser value, assess support for that value.',
-            'Return ONLY JSON with keys: minValue, maxValue, mostLikelyValue, supportLevel ("strong"|"moderate"|"weak"),',
-            'and comparableItems (top 10, same shape as below). Do not include any commentary outside JSON.',
-            '{ "minValue": number, "maxValue": number, "mostLikelyValue": number, "supportLevel": string, "comparableItems": [ { "title": string, "price": number | null, "currency": string | null, "auctionHouse": string | null, "date": string | null, "url": string | null } ] }',
-            '',
-            `Target Value: ${targetValue}`,
-            `Items JSON: ${itemsJson}`
-          ].join('\n');
-        }
-        return [
-          'Given a JSON array of comparable auction items (title, optional price with currency, house, date, url),',
-          'infer a reasonable minValue, maxValue, and mostLikelyValue (numbers).',
-          'Select the 10 most relevant comparableItems. Return JSON strictly as:',
-          '{ "minValue": number, "maxValue": number, "mostLikelyValue": number, "comparableItems": [ { "title": string, "price": number | null, "currency": string | null, "auctionHouse": string | null, "date": string | null, "url": string | null } ] }',
-          '',
-          `Items JSON: ${itemsJson}`
-        ].join('\n');
-      })();
-      const parsed = await callOpenAIAndParseJson<any>(openai, {
-        model: 'gpt-5',
-        systemMessage: 'You are a valuation assistant. Output only valid JSON.',
-        userPrompt: summaryPrompt,
-        expectJsonResponse: true
-      });
-      if (parsed && typeof parsed === 'object') {
-        const items = Array.isArray(parsed.comparableItems) ? parsed.comparableItems.slice(0, 10) : [];
-        const baseSummary: any = {
-          minValue: Number(parsed.minValue || 0),
-          maxValue: Number(parsed.maxValue || 0),
-          mostLikelyValue: Number(parsed.mostLikelyValue || 0),
-          comparableItems: items.map((it: any) => ({
-            title: String(it.title || ''),
-            price: typeof it.price === 'number' ? { amount: it.price, currency: it.currency || 'USD' } : undefined,
-            auctionHouse: it.auctionHouse || null,
-            date: it.date || null,
-            url: it.url || null
-          }))
-        };
-        if (justifyMode) {
-          baseSummary.targetValue = targetValue;
-          if (typeof parsed.supportLevel === 'string') baseSummary.supportLevel = String(parsed.supportLevel);
-        }
-        summary = baseSummary as typeof summary;
-      }
-    } catch (e) {
-      console.warn('Summarization via GPT-5 failed:', (e as Error)?.message || e);
-    }
-  }
-
-  const totalLots = aggregated.length;
-  const durationMs = Date.now() - tBatch0;
-  res.json({
-    success: true,
-    generatedQueries: allExecutedQueries.length > 0 ? allExecutedQueries : selected,
-    sources: { valuerBatch: true },
-    data: {
-      lots: aggregated,
-      byQuery
-    },
-    stats: { ...cumulativeStats, uniqueLots: uniqueComparableKeys.size, totalLots, durationMs },
-    summary: summary || undefined
-  });
-}));
-
-// v2: Structured batch search with explicit tiers and stable contract
 const V2BatchSchema = z.object({
   schemaVersion: z.string().optional(),
   context: z.object({
@@ -722,129 +119,95 @@ const V2BatchSchema = z.object({
     specific: z.array(z.string()).optional(),
     moderate: z.array(z.string()).optional(),
     flattened: z.array(z.string()).optional(),
-  })
+  }),
 });
 
-app.post('/v2/search/batch', asyncHandler(async (req, res) => {
-  const corrId = req.header('X-Correlation-Id') || undefined;
-  const parsed = V2BatchSchema.parse(req.body);
+async function executeBatchSearch(parsed: z.infer<typeof V2BatchSchema>, correlationId?: string | null) {
   const schemaVersion = parsed.schemaVersion || '2.0';
-  const ctx = parsed.context || {};
+  const context = parsed.context || {};
   const pricing = parsed.pricing || {};
   const limits = parsed.limits || {};
   const options = parsed.options || {};
-  const terms = parsed.terms || {} as any;
+  const terms = parsed.terms || {};
 
-  const concurrency = typeof options.concurrency === 'number' && options.concurrency > 0
-    ? options.concurrency
-    : Number(process.env.VALUER_BATCH_CONCURRENCY || 5);
-  const limitPerQuery = typeof limits.perTerm === 'number' && limits.perTerm > 0 ? limits.perTerm : 100;
-  const sort = options.sort || 'relevance';
-  const timeoutMs = limits.timeoutMs;
-  const retries = limits.retries;
+  const verySpecific = uniqueTerms(terms.very_specific);
+  const specific = uniqueTerms(terms.specific);
+  const moderate = uniqueTerms(terms.moderate);
+  const flattened = uniqueTerms(terms.flattened);
 
-  const envTimeout = Number(process.env.VALUER_BATCH_HTTP_TIMEOUT_MS);
-  const resolvedTimeoutMs = typeof timeoutMs === 'number' && Number.isFinite(timeoutMs) && timeoutMs > 0
-    ? timeoutMs
-    : (Number.isFinite(envTimeout) && envTimeout > 0 ? envTimeout : undefined);
-
-  const batchOptions: { timeoutMs?: number; retry?: { attempts: number } } = {};
-  if (resolvedTimeoutMs !== undefined) {
-    batchOptions.timeoutMs = resolvedTimeoutMs;
-  }
-  if (typeof retries === 'number' && Number.isFinite(retries) && retries > 0) {
-    batchOptions.retry = { attempts: retries };
+  const combined: TermWithTier[] = [];
+  verySpecific.forEach((term) => combined.push({ term, tier: 'very specific' }));
+  specific.forEach((term) => combined.push({ term, tier: 'specific' }));
+  moderate.forEach((term) => combined.push({ term, tier: 'moderate' }));
+  if (combined.length === 0) {
+    flattened.forEach((term) => combined.push({ term, tier: 'provided' }));
   }
 
-  // Build tiers from provided terms (respect caller ordering)
-  const vs = Array.isArray(terms.very_specific) ? Array.from(new Set(terms.very_specific.map(String).map(s=>s.trim()).filter(Boolean))) : [];
-  const sp = Array.isArray(terms.specific) ? Array.from(new Set(terms.specific.map(String).map(s=>s.trim()).filter(Boolean))) : [];
-  const md = Array.isArray(terms.moderate) ? Array.from(new Set(terms.moderate.map(String).map(s=>s.trim()).filter(Boolean))) : [];
-  const flattened = Array.isArray(terms.flattened) ? terms.flattened : [...vs, ...sp, ...md];
-  if (flattened.length === 0) {
-    return res.status(400).json({ success: false, error: 'terms_required', message: 'Provide non-empty terms. (v2)' });
+  if (combined.length === 0) {
+    const err = new Error('Provide non-empty terms. Valuer Bridge does not generate search terms.');
+    (err as any).status = 400;
+    (err as any).code = 'terms_required';
+    throw err;
   }
 
   const acceptedPlan = {
-    very_specific: vs.length,
-    specific: sp.length,
-    moderate: md.length,
-    total: flattened.length,
+    very_specific: verySpecific.length,
+    specific: specific.length,
+    moderate: moderate.length,
+    total: flattened.length || combined.length,
   };
 
-  try {
-    console.log('Tier plan (provided v2):', acceptedPlan);
-  } catch (_) {}
-
-  // Pricing band: v2 expects WS to compute min/max; do not derive from target here.
-  const effMinPrice = (typeof pricing.min === 'number' && isFinite(pricing.min as number))
-    ? (pricing.min as number)
-    : Number(process.env.VALUER_MIN_PRICE_DEFAULT || 250);
-  const effMaxPrice = (typeof pricing.max === 'number' && isFinite(pricing.max as number)) ? (pricing.max as number) : undefined;
-  const justify = Boolean(pricing.justify);
-
-  // Execute as a single combined batch across all tiers (respect provided plan)
-  type TermWithTier = { term: string; tier: string };
-  const combined: TermWithTier[] = [];
-  vs.forEach(t => combined.push({ term: t, tier: 'very specific' }));
-  sp.forEach(t => combined.push({ term: t, tier: 'specific' }));
-  md.forEach(t => combined.push({ term: t, tier: 'moderate' }));
-  if (combined.length === 0) {
-    flattened.forEach(t => combined.push({ term: t, tier: 'provided' }));
-  }
-
-  if (typeof limits.total === 'number' && isFinite(limits.total) && limits.total !== combined.length) {
-    try { console.log(`Note: limits.total=${limits.total} != providedTerms=${combined.length}. Proceeding with provided terms to honor plan.`); } catch (_) {}
-  }
-
-  const uniqueComparableKeys = new Set<string>();
-  const aggregated: Array<{
-    id?: string;
-    lot_uid?: string;
-    lotId?: string;
-    title?: string;
-    price?: { amount?: number; currency?: string };
-    auctionHouse?: string;
-    date?: string;
-    url?: string;
-    thumbUrl?: string;
-    imageUrl?: string;
-    originalUrl?: string;
-    imageOriginalUrl?: string;
-    imagePath?: string;
-    imageFileName?: string;
-  }> = [];
-  const byQuery: any[] = [];
-  const allExecuted: Array<{ term: string; tier: string }> = [];
+  const concurrency = Math.max(1, Math.min(
+    10,
+    Math.floor(numberOrUndefined(options.concurrency) || Number(process.env.VALUER_BATCH_CONCURRENCY || 5)),
+  ));
+  const limitPerTerm = Math.max(1, Math.min(200, Math.floor(numberOrUndefined(limits.perTerm) || 100)));
+  const sort = options.sort || 'relevance';
+  const minPrice = numberOrUndefined(pricing.min) ?? Number(process.env.VALUER_MIN_PRICE_DEFAULT || 250);
+  const maxPrice = numberOrUndefined(pricing.max);
+  const timeoutMs = numberOrUndefined(limits.timeoutMs) || numberOrUndefined(process.env.VALUER_BATCH_HTTP_TIMEOUT_MS);
+  const retries = numberOrUndefined(limits.retries);
+  const searches = buildSearches(combined, minPrice, maxPrice, limitPerTerm, sort);
   const tStart = Date.now();
+  const skipThumbPublish = typeof context.rev === 'string'
+    && (context.rev.startsWith('instant-appraisal') || context.rev.startsWith('appraisily-pro-mcp'));
 
-  const searches = combined.map(({ term, tier }) => {
-    const priceResult: any = { min: String(effMinPrice) };
-    if (typeof effMaxPrice === 'number') priceResult.max = String(effMaxPrice);
-    allExecuted.push({ term, tier });
-    return ({ query: term, priceResult, limit: limitPerQuery, sort });
-  });
-
-  const t0 = Date.now();
-  const skipThumbPublish = (() => {
-    const rev = typeof ctx.rev === 'string' ? ctx.rev : '';
-    return rev.startsWith('instant-appraisal') || rev.startsWith('appraisily-pro-mcp');
-  })();
+  console.log(JSON.stringify({
+    ts: new Date().toISOString(),
+    level: 'info',
+    context: 'VALUER_BATCH',
+    msg: 'search:start',
+    correlationId,
+    acceptedPlan,
+    concurrency: Math.min(concurrency, searches.length),
+    limitPerTerm,
+  }));
 
   const batch = await valuer.batchSearch({
     searches,
     concurrency: Math.min(concurrency, searches.length),
     fetchAllPages: false,
     skipThumbPublish,
-  }, batchOptions);
-  const batchDuration = Date.now() - t0;
-  console.log(`Batch search completed: total=${batch?.batch?.total || searches.length}, completed=${batch?.batch?.completed || 0}, failed=${batch?.batch?.failed || 0}, concurrency=${Math.min(concurrency, searches.length)}, durationMs=${batchDuration}`);
+  }, {
+    timeoutMs,
+    retry: retries && retries > 0 ? { attempts: retries } : undefined,
+  });
 
-  for (let i = 0; i < (batch.searches || []).length; i++) {
-    const s = (batch.searches || [])[i];
-    const lots = s?.result?.data?.lots || [];
-    const meta = { query: s?.query || combined[i]?.term || '', lotsCount: Array.isArray(lots) ? lots.length : 0, tier: combined[i]?.tier };
-    byQuery.push({ ...s, meta });
+  const uniqueComparableKeys = new Set<string>();
+  const aggregated: CompactLot[] = [];
+  const byQuery: any[] = [];
+
+  for (let index = 0; index < (batch.searches || []).length; index += 1) {
+    const search = (batch.searches || [])[index];
+    const lots = Array.isArray(search?.result?.data?.lots) ? search.result.data.lots : [];
+    const meta = {
+      query: search?.query || combined[index]?.term || '',
+      lotsCount: lots.length,
+      tier: combined[index]?.tier,
+      error: search?.error || undefined,
+    };
+    byQuery.push({ ...search, meta });
+
     for (const lot of lots) {
       const rawTitle = lot?.title || lot?.lotTitle;
       if (typeof rawTitle !== 'string' || rawTitle.length === 0) continue;
@@ -852,20 +215,24 @@ app.post('/v2/search/batch', asyncHandler(async (req, res) => {
       const dedupeKey = comparableDedupeKey(lot, title);
       if (uniqueComparableKeys.has(dedupeKey)) continue;
       uniqueComparableKeys.add(dedupeKey);
-      const priceAmount = (lot?.price && typeof lot.price.amount === 'number') ? lot.price.amount : (typeof lot?.priceResult === 'number' ? lot.priceResult : undefined);
+
+      const priceAmount = (lot?.price && typeof lot.price.amount === 'number')
+        ? lot.price.amount
+        : (typeof lot?.priceResult === 'number' ? lot.priceResult : undefined);
       const currency = lot?.price?.currency || lot?.currency || lot?.currencyCode || 'USD';
-      const imageFields = comparableImageFields(lot);
+      const symbol = lot?.price?.symbol || lot?.currencySymbol || '$';
       const lotUid: string | undefined = lot?.lot_uid || lot?.lotUid || lot?.id || lot?.lotId;
+
       aggregated.push({
         id: lotUid ? String(lotUid) : undefined,
         lot_uid: lotUid ? String(lotUid) : undefined,
         lotId: lotUid ? String(lotUid) : undefined,
         title,
-        price: priceAmount ? { amount: priceAmount, currency } : undefined,
+        price: priceAmount ? { amount: priceAmount, currency, symbol } : undefined,
         auctionHouse: lot?.auctionHouse || lot?.house || lot?.houseName,
-        date: lot?.date || lot?.dateTimeLocal,
-        url: lot?.url || lot?.lotUrl,
-        ...imageFields,
+        date: lot?.date || lot?.dateTimeLocal || lot?.auctionDate,
+        url: lot?.url || lot?.lotUrl || lot?.sourceUrl,
+        ...comparableImageFields(lot),
         imagePath: lot?.imagePath ? String(lot.imagePath) : undefined,
         imageFileName: lot?.imageFileName ? String(lot.imageFileName) : undefined,
       });
@@ -873,158 +240,166 @@ app.post('/v2/search/batch', asyncHandler(async (req, res) => {
   }
 
   const durationMs = Date.now() - tStart;
-  const summary = { totalItems: aggregated.length, uniqueLots: uniqueComparableKeys.size, durationMs };
-
-  return res.json({
+  return {
     success: true,
-    correlationId: corrId || null,
+    correlationId: correlationId || null,
     acceptedPlan,
-    used: { queries: allExecuted, pricing: { min: effMinPrice, max: effMaxPrice || null, reference: (pricing as any).reference ?? null, justify } },
-    data: { byQuery },
+    used: {
+      queries: combined,
+      pricing: {
+        min: minPrice,
+        max: maxPrice ?? null,
+        reference: pricing.reference ?? null,
+        justify: Boolean(pricing.justify),
+      },
+    },
+    data: {
+      lots: aggregated,
+      byQuery,
+    },
     batch: batch?.batch || { total: searches.length, completed: (batch?.searches || []).length, failed: 0 },
-    summary,
-    meta: { schemaVersion, context: ctx }
-  });
-}));
+    summary: {
+      totalItems: aggregated.length,
+      uniqueLots: uniqueComparableKeys.size,
+      durationMs,
+    },
+    meta: { schemaVersion, context },
+  };
+}
 
-app.post('/api/enhanced-statistics', asyncHandler(async (req, res) => {
-  // Initialization check is done by middleware
-  // Error handling is done by middleware
-
-  const { text, value, limit = 20, targetCount = 100, minPrice, maxPrice } = EnhancedStatisticsRequestSchema.parse(req.body);
-  console.log(`Enhanced statistics request for: "${text}" with value ${value} (target count: ${targetCount}, price range: ${minPrice || 'auto'}-${maxPrice || 'auto'})`);
-
-  const enhancedStats = await statistics.generateStatistics(text, value, targetCount, minPrice, maxPrice);
-
-  // Apply limit if necessary
-  if (limit > 0 && enhancedStats.comparable_sales.length > limit) {
-    const originalCount = enhancedStats.comparable_sales.length;
-    enhancedStats.comparable_sales = enhancedStats.comparable_sales.slice(0, limit);
-    enhancedStats.total_count = originalCount; // Keep track of the original total before limiting
-    console.log(`Limited comparable sales from ${originalCount} to ${limit} for UI display`);
-  }
-
-  res.json({
-    success: true,
-    statistics: enhancedStats,
-    message: 'Enhanced statistics generated successfully'
-  });
-}));
-
-
-// Error Handling Middleware - Must be the last middleware added
-app.use((err: Error, req: Request, res: Response, _next: NextFunction) => {
-  console.error(`Error processing request ${req.method} ${req.path}:`, err);
-
-  // Handle JSON parsing errors (malformed JSON)
-  if (err instanceof SyntaxError && 'body' in err) {
-    console.log('Received malformed JSON:', err.message);
-    
-    // Get example request body based on endpoint
-    const exampleRequestBody = getExampleRequestBody(req.path);
-    
-    return res.status(400).json({
+function legacyGone(endpoint: string, replacement = '/v2/search/batch') {
+  return (_req: Request, res: Response) => {
+    res.set('Link', `<${replacement}>; rel="alternate"`);
+    return res.status(410).json({
       success: false,
-      error: 'Malformed JSON request',
-      message: 'Your request contains invalid JSON syntax. Please check your request body.',
-      correctFormat: {
-        description: `Here's the correct format for ${req.path}:`,
-        example: exampleRequestBody
-      }
+      error: 'endpoint_removed',
+      endpoint,
+      replacement,
+      message: `${endpoint} has been removed. Valuer Bridge only serves caller-supplied DB searches through ${replacement}.`,
     });
-  }
+  };
+}
 
-  // Handle Zod validation errors specifically
-  if (err instanceof ZodError) {
-    // Get example request body based on endpoint
-    const exampleRequestBody = getExampleRequestBody(req.path);
-    
-    return res.status(400).json({
-      success: false,
-      error: 'Invalid request body',
-      details: err.errors,
-      correctFormat: {
-        description: `Here's the correct format for ${req.path}:`,
-        example: exampleRequestBody
-      }
-    });
-  }
+function installRequestLogging() {
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    try {
+      const start = Date.now();
+      const inbound = req.header('X-Correlation-Id') || req.header('X-Request-Id');
+      const requestId = inbound || (globalThis.crypto?.randomUUID?.() || Math.random().toString(36).slice(2));
+      try { res.setHeader('x-request-id', requestId); } catch {}
+      (res.locals as Record<string, unknown>).requestId = requestId;
+      const capturedBody = typeof req.body === 'object' && req.body !== null ? safeClone(req.body) : req.body;
 
-  // Handle other errors
-  const statusCode = (err as any).status || 500; // Use err.status if available, otherwise 500
-  const message = err.message || 'Internal Server Error';
+      const originalJson = res.json.bind(res);
+      res.json = ((body: any) => {
+        (res.locals as Record<string, unknown>).responseBody = body;
+        return originalJson(body);
+      }) as typeof res.json;
 
-  // For WP2HUGO errors, return the specific format expected
-  if (req.path === '/api/wp2hugo-auction-results') {
-    return res.status(statusCode).json({
-        success: false,
-        keyword: req.body?.keyword || '', // Attempt to include keyword if available
-        error: message,
-        auctionResults: [],
-        timestamp: new Date().toISOString()
-    });
-  }
+      const meta: Record<string, unknown> = {
+        requestId,
+        correlationId: requestId,
+        method: req.method,
+        url: req.originalUrl,
+        ip: (req as any).ip,
+        userAgent: req.get('user-agent') || '',
+      };
 
-  // Standard error response
-  res.status(statusCode >= 400 && statusCode < 600 ? statusCode : 500) // Ensure valid HTTP status code
-    .json({
-    success: false,
-    error: message,
+      console.log(JSON.stringify({ ts: new Date().toISOString(), level: 'info', context: 'HTTP', msg: 'request:start', ...meta }));
+      res.on('finish', () => {
+        const summary = {
+          ...meta,
+          status: res.statusCode,
+          durationMs: Date.now() - start,
+          timestamp: new Date().toISOString(),
+        };
+        console.log(JSON.stringify({ ts: new Date().toISOString(), level: 'info', context: 'HTTP', msg: 'request:end', ...summary }));
+
+        if (messagingEnabled) {
+          publishEvent(eventRoutingKey, summary, {
+            'x-request-id': String(requestId),
+            'x-service': 'valuer-bridge',
+          }).catch((err: unknown) => {
+            console.warn('[valuer-bridge] Failed to publish request event:', (err as Error)?.message ?? err);
+          });
+        }
+
+        if (shouldArchiveResponses && storageEnabled) {
+          archiveJSON(archivePrefix, {
+            ...summary,
+            request: { query: req.query, body: capturedBody },
+            response: (res.locals as Record<string, unknown>).responseBody,
+          }).catch((err: unknown) => {
+            console.warn('[valuer-bridge] Failed to archive response payload:', (err as Error)?.message ?? err);
+          });
+        }
+      });
+    } catch {}
+    next();
+  });
+}
+
+app.get('/health', (_req: Request, res: Response) => {
+  res.status(200).json({
+    status: 'ok',
+    service: 'valuer-bridge',
+    ...valuer.getReadiness(),
   });
 });
 
-/**
- * Get example request body based on endpoint path
- */
-function getExampleRequestBody(path: string): any {
-  switch (path) {
-    case '/api/justify':
-      return {
-        text: "Antique sterling silver tea set from the Victorian era, circa 1880",
-        value: 2500
-      };
-    
-    case '/api/find-value':
-      return {
-        text: "Antique sterling silver tea set from the Victorian era, circa 1880"
-      };
-    
-    case '/api/find-value-range':
-      return {
-        text: "Antique sterling silver tea set from the Victorian era, circa 1880",
-        useAccurateModel: true // Optional, defaults to false
-      };
-    
-    case '/api/auction-results':
-      return {
-        keyword: "Victorian silver tea set",
-        minPrice: 1000, // Optional, defaults to 1000
-        limit: 10 // Optional, defaults to 10
-      };
-    
-    case '/api/wp2hugo-auction-results':
-      return {
-        keyword: "Victorian silver tea set",
-        minPrice: 1000, // Optional, defaults to 1000
-        limit: 10 // Optional, defaults to 10
-      };
-    
-    case '/api/enhanced-statistics':
-      return {
-        text: "Original Jean-Michel Basquiat Painting, 8.25x12 inches, untitled work from 1982",
-        value: 5000000,
-        limit: 20, // Optional, defaults to 20
-        targetCount: 100, // Optional, defaults to 100
-        minPrice: 1000000, // Optional
-        maxPrice: 10000000 // Optional
-      };
-    
-    default:
-      return {
-        message: "Unknown endpoint. Please check the API documentation."
-      };
-  }
+installRequestLogging();
+
+app.post('/v2/search/batch', asyncHandler(async (req, res) => {
+  const parsed = V2BatchSchema.parse(req.body);
+  const result = await executeBatchSearch(parsed, req.header('X-Correlation-Id'));
+  res.json(result);
+}));
+
+for (const endpoint of [
+  '/api/justify',
+  '/api/find-value',
+  '/api/find-value-range',
+  '/api/auction-results',
+  '/api/wp2hugo-auction-results',
+  '/api/multi-search',
+  '/api/enhanced-statistics',
+]) {
+  app.post(endpoint, legacyGone(endpoint));
 }
+
+function asyncHandler(fn: (req: Request, res: Response, next: NextFunction) => Promise<any>) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    Promise.resolve(fn(req, res, next)).catch(next);
+  };
+}
+
+app.use((err: Error, req: Request, res: Response, _next: NextFunction) => {
+  console.error(`Error processing request ${req.method} ${req.path}:`, err);
+
+  if (err instanceof SyntaxError && 'body' in err) {
+    return res.status(400).json({
+      success: false,
+      error: 'malformed_json',
+      message: 'Your request contains invalid JSON syntax.',
+    });
+  }
+
+  if (err instanceof ZodError) {
+    return res.status(400).json({
+      success: false,
+      error: 'invalid_request_body',
+      details: err.errors,
+    });
+  }
+
+  const statusCode = (err as any).status || 500;
+  const error = (err as any).code || err.message || 'internal_server_error';
+  res.status(statusCode >= 400 && statusCode < 600 ? statusCode : 500).json({
+    success: false,
+    error,
+    message: err.message || 'Internal Server Error',
+  });
+});
 
 const port = process.env.PORT || 8080;
 
@@ -1043,13 +418,6 @@ async function gracefulShutdown(signal: string) {
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
-// Initialize OpenAI before starting server
-initializeOpenAI().then(() => {
-  app.listen(port, () => {
-    console.log(`Server running on port ${port}`);
-  });
-}).catch(error => {
-  console.error('Failed to initialize OpenAI client:', error);
-  console.error('Ensure OPENAI_API_KEY is provided via environment or Vault and reachable by the service');
-  process.exit(1);
+app.listen(port, () => {
+  console.log(`Valuer Bridge listening on port ${port} with scraper_db provider`);
 });

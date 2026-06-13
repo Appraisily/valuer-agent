@@ -235,7 +235,10 @@ function resolvePublishedAssetAbsolutePath(relativePath: NullableString, publicR
   if (!isPublishedAssetPath(relativePath)) return null;
   const clean = String(relativePath || '').trim().replace(/^[\\/]+/, '').replace(/\\/g, '/');
   const root = normalizePublicAssetsRoot(publicRoot);
-  return path.resolve(root, clean);
+  const resolved = path.resolve(root, clean);
+  const normalizedRoot = path.resolve(root);
+  if (resolved !== normalizedRoot && !resolved.startsWith(`${normalizedRoot}${path.sep}`)) return null;
+  return resolved;
 }
 
 export function publishedAssetExists(relativePath: NullableString, publicRoot?: NullableString): boolean {
@@ -301,26 +304,12 @@ function currencyToSymbol(code: CurrencyCode): string {
 }
 
 export function buildPublicAssetUrl(relativePath: string | null): string | null {
-  if (!relativePath) return null;
-  const trimmed = String(relativePath).trim();
-  if (!trimmed) return null;
-  if (/^https?:\/\//i.test(trimmed)) return trimmed;
-  if (trimmed.startsWith('gs://')) return null;
-
+  const clean = normalizePublicAssetPath(relativePath);
+  if (!clean) return null;
   const base = normalizeBaseUrl(
     process.env.PUBLIC_ASSETS_BASE_URL || process.env.LOCAL_STORAGE_BASE_URL_PUBLIC || process.env.LOCAL_STORAGE_BASE_URL,
     'https://assets.appraisily.com',
   );
-
-  let clean = trimmed.replace(/^[\\/]+/, '').replace(/\\/g, '/');
-  if (clean.startsWith('public/')) clean = clean.slice('public/'.length);
-  if (clean.startsWith('storage/public/')) clean = clean.slice('storage/public/'.length);
-
-  // Only emit public URLs for paths we explicitly publish under the assets domain.
-  // Everything else (e.g. scraper working buckets like "<keyword>/images/...") should not be
-  // exposed as a broken public URL; return null until it is published/backfilled.
-  if (!clean.startsWith('auction-lots/')) return null;
-
   const safe = clean
     .split('/')
     .filter(Boolean)
@@ -345,9 +334,19 @@ function normalizePublicAssetPath(relativePath: NullableString): string | null {
   const raw = String(relativePath || '').trim();
   if (!raw || raw.startsWith('gs://')) return null;
   if (/^https?:\/\//i.test(raw)) {
-    const match = raw.match(/^https?:\/\/assets\.appraisily\.com\/(.+)$/i);
-    if (!match?.[1]) return null;
-    return match[1].replace(/^[\\/]+/, '').replace(/\\/g, '/');
+    try {
+      const url = new URL(raw);
+      const configuredBase = normalizeBaseUrl(
+        process.env.PUBLIC_ASSETS_BASE_URL || process.env.LOCAL_STORAGE_BASE_URL_PUBLIC || process.env.LOCAL_STORAGE_BASE_URL,
+        'https://assets.appraisily.com',
+      );
+      const configuredHost = new URL(configuredBase).host.toLowerCase();
+      const host = url.host.toLowerCase();
+      if (host !== 'assets.appraisily.com' && host !== configuredHost) return null;
+      return decodeURIComponent(url.pathname).replace(/^[\\/]+/, '').replace(/\\/g, '/');
+    } catch {
+      return null;
+    }
   }
 
   let clean = raw.replace(/^[\\/]+/, '').replace(/\\/g, '/');
@@ -370,7 +369,7 @@ function existingVariantPath(relativePath: string, variant: 'thumb' | 'medium' |
 
 export function buildLotImageAssetContract(relativePath: NullableString): LotImageAssetContract {
   const clean = normalizePublicAssetPath(relativePath);
-  if (!clean) {
+  if (!clean || !publishedAssetExists(clean)) {
     return {
       imagePath: null,
       thumbPath: null,
