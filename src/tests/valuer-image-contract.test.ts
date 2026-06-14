@@ -8,6 +8,7 @@ import type { ScraperDbLot, ScraperDbSearchParams } from '../services/scraper-db
 function baseLot(overrides: Partial<ScraperDbLot> = {}): ScraperDbLot {
   return {
     lotUid: 'lot-1',
+    lotRef: null,
     title: 'Test lot',
     description: 'A test lot',
     houseName: 'Test House',
@@ -97,6 +98,37 @@ describe('ValuerService image contract', () => {
       expect(lot.imageUrl).toBeNull();
       expect(lot.image).toBeNull();
       expect(lot.originalUrl).toBeNull();
+    });
+  });
+
+  it('emits source URL compatibility fields for scraper DB lots', async () => {
+    await withPublicAssetsRoot(async () => {
+      const service = new ValuerService({
+        scraperDb: {
+          searchLots: async (_params: ScraperDbSearchParams) => [
+            baseLot({
+              lotUid: '130582130',
+              lotRef: 'ABC123DEF0',
+              title: '19th Century German School Oil Painting',
+              lotNumber: '359',
+              sourceUrl: 'https://www.invaluable.com/auction-lot-19th-century-german-school-oil-painting-359-c-abc123def0',
+              imagePath: null,
+            }),
+          ],
+          close: async () => undefined,
+        },
+      });
+
+      const result = await service.batchSearch({ searches: [{ query: 'german school oil painting', limit: 1 }] });
+      const lot = result.searches[0].result.data.lots[0];
+
+      expect(lot.url).toBe('https://www.invaluable.com/auction-lot-19th-century-german-school-oil-painting-359-c-abc123def0');
+      expect(lot.lotUrl).toBe(lot.url);
+      expect(lot.lot_url).toBe(lot.url);
+      expect(lot.sourceUrl).toBe(lot.url);
+      expect(lot.source_url).toBe(lot.url);
+      expect(lot.lotRef).toBe('ABC123DEF0');
+      expect(lot.lot_ref).toBe('ABC123DEF0');
     });
   });
 });

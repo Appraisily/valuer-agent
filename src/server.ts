@@ -9,12 +9,18 @@ import { messagingEnabled, publishEvent, closeBroker } from './services/utils/me
 type CompactLot = {
   id?: string;
   lot_uid?: string;
+  lotRef?: string;
+  lot_ref?: string;
   lotId?: string;
   title?: string;
   price?: { amount?: number; currency?: string; symbol?: string };
   auctionHouse?: string;
   date?: string;
   url?: string;
+  lotUrl?: string;
+  lot_url?: string;
+  sourceUrl?: string;
+  source_url?: string;
   thumbUrl?: string;
   imageUrl?: string;
   originalUrl?: string;
@@ -52,7 +58,7 @@ function safeClone<T>(input: T): T | undefined {
 function comparableDedupeKey(lot: any, title: string): string {
   const lotUid = lot?.lot_uid || lot?.lotUid || lot?.id || lot?.lotId;
   if (lotUid) return `lot:${String(lotUid).trim()}`;
-  const url = lot?.url || lot?.lotUrl || lot?.sourceUrl || lot?.permalink;
+  const url = lot?.url || lot?.lotUrl || lot?.lot_url || lot?.sourceUrl || lot?.source_url || lot?.permalink;
   if (url) return `url:${String(url).trim().toLowerCase()}`;
   return `title:${String(title || '').trim().toLowerCase()}`;
 }
@@ -222,16 +228,24 @@ async function executeBatchSearch(parsed: z.infer<typeof V2BatchSchema>, correla
       const currency = lot?.price?.currency || lot?.currency || lot?.currencyCode || 'USD';
       const symbol = lot?.price?.symbol || lot?.currencySymbol || '$';
       const lotUid: string | undefined = lot?.lot_uid || lot?.lotUid || lot?.id || lot?.lotId;
+      const lotRef: string | undefined = lot?.lotRef || lot?.lot_ref;
+      const sourceUrl = lot?.url || lot?.lotUrl || lot?.lot_url || lot?.sourceUrl || lot?.source_url;
 
       aggregated.push({
         id: lotUid ? String(lotUid) : undefined,
         lot_uid: lotUid ? String(lotUid) : undefined,
+        lotRef: lotRef ? String(lotRef) : undefined,
+        lot_ref: lotRef ? String(lotRef) : undefined,
         lotId: lotUid ? String(lotUid) : undefined,
         title,
         price: priceAmount ? { amount: priceAmount, currency, symbol } : undefined,
         auctionHouse: lot?.auctionHouse || lot?.house || lot?.houseName,
         date: lot?.date || lot?.dateTimeLocal || lot?.auctionDate,
-        url: lot?.url || lot?.lotUrl || lot?.sourceUrl,
+        url: sourceUrl,
+        lotUrl: sourceUrl,
+        lot_url: sourceUrl,
+        sourceUrl,
+        source_url: sourceUrl,
         ...comparableImageFields(lot),
         imagePath: lot?.imagePath ? String(lot.imagePath) : undefined,
         imageFileName: lot?.imageFileName ? String(lot.imageFileName) : undefined,

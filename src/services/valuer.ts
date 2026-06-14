@@ -144,6 +144,8 @@ export class ValuerService {
         return {
           id: lot.lotUid,
           lot_uid: lot.lotUid,
+          lotRef: lot.lotRef,
+          lot_ref: lot.lotRef,
           title: lot.title,
           description: lot.description,
           auctionHouse: lot.houseName,
@@ -169,7 +171,9 @@ export class ValuerService {
           saleType: lot.saleType,
           url: lot.sourceUrl,
           lotUrl: lot.sourceUrl,
+          lot_url: lot.sourceUrl,
           sourceUrl: lot.sourceUrl,
+          source_url: lot.sourceUrl,
           thumbUrl: imageAssets.thumbUrl,
           thumbnail: imageAssets.thumbUrl,
           imageUrl: imageAssets.imageUrl,

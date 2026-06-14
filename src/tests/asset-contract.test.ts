@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { buildLotImageAssetContract } from '../services/scraper-db.js';
+import { buildLotImageAssetContract, deriveInvaluableLotUrl } from '../services/scraper-db.js';
 
 function withPublicAssetsRoot<T>(fn: (root: string) => T): T {
   const previousBase = process.env.PUBLIC_ASSETS_BASE_URL;
@@ -68,5 +68,32 @@ describe('buildLotImageAssetContract', () => {
         originalUrl: null,
       });
     });
+  });
+});
+
+describe('deriveInvaluableLotUrl', () => {
+  it('returns direct source URLs when present', () => {
+    expect(deriveInvaluableLotUrl({
+      sourceUrl: 'https://example.test/source',
+      title: 'Ignored',
+      lotRef: 'ABC123',
+      lotNumber: '7',
+    })).toBe('https://example.test/source');
+  });
+
+  it('derives an Invaluable URL from title, lot number, and lotRef', () => {
+    expect(deriveInvaluableLotUrl({
+      title: '19th Century German School Oil Painting after Eduard von Grützner',
+      lotRef: 'ABC123DEF0',
+      lotNumber: '359',
+    })).toBe('https://www.invaluable.com/auction-lot-19th-century-german-school-oil-painting-after-eduard-von-grutzner-359-c-abc123def0');
+  });
+
+  it('does not derive from title and numeric lot uid alone', () => {
+    expect(deriveInvaluableLotUrl({
+      title: '19th Century German School Oil Painting',
+      lotRef: null,
+      lotNumber: '359',
+    })).toBeNull();
   });
 });

@@ -1,6 +1,8 @@
 export interface ValuerLot {
   id?: string;
   lot_uid?: string;
+  lotRef?: string | null;
+  lot_ref?: string | null;
   title: string | null;
   description?: string | null;
   price?: {
@@ -17,7 +19,9 @@ export interface ValuerLot {
   lotNumber?: string | null;
   saleType?: string | null;
   url?: string | null;
+  lot_url?: string | null;
   lotUrl?: string | null;
+  source_url?: string | null;
   sourceUrl?: string | null;
   thumbUrl?: string | null;
   imageUrl?: string | null;

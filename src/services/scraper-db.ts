@@ -134,6 +134,7 @@ export type ScraperDbSearchParams = {
 
 export type ScraperDbLot = {
   lotUid: string;
+  lotRef: string | null;
   title: string | null;
   description: string | null;
   houseName: string | null;
@@ -301,6 +302,48 @@ function currencyToSymbol(code: CurrencyCode): string {
     SGD: '$',
   };
   return map[upper] || upper;
+}
+
+function pickFirstNonEmpty(...values: NullableString[]): string | null {
+  for (const value of values) {
+    if (value === undefined || value === null) continue;
+    const text = String(value).trim();
+    if (text) return text;
+  }
+  return null;
+}
+
+function slugifyForInvaluableUrl(value: NullableString): string | null {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  const slug = raw
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return slug || null;
+}
+
+export function deriveInvaluableLotUrl(opts: {
+  sourceUrl?: NullableString;
+  title?: NullableString;
+  lotRef?: NullableString;
+  lotNumber?: NullableString;
+}): string | null {
+  const directUrl = pickFirstNonEmpty(opts.sourceUrl);
+  if (directUrl && /^https?:\/\//i.test(directUrl)) return directUrl;
+
+  const titleSlug = slugifyForInvaluableUrl(opts.title);
+  const lotRefSlug = slugifyForInvaluableUrl(opts.lotRef);
+  if (!titleSlug || !lotRefSlug) return null;
+
+  const parts = ['https://www.invaluable.com/auction-lot', titleSlug];
+  const lotNumberSlug = slugifyForInvaluableUrl(opts.lotNumber);
+  if (lotNumberSlug) parts.push(lotNumberSlug);
+  parts.push('c', lotRefSlug);
+  return parts.join('-');
 }
 
 export function buildPublicAssetUrl(relativePath: string | null): string | null {
@@ -478,6 +521,7 @@ export class ScraperDbClient {
           l.currency_symbol,
           l.estimate_min,
           l.estimate_max,
+          l.lot_ref,
           l.lot_number,
           l.sale_type,
           l.source_url,
@@ -508,6 +552,7 @@ export class ScraperDbClient {
           l.currency_symbol,
           l.estimate_min,
           l.estimate_max,
+          l.lot_ref,
           l.lot_number,
           l.sale_type,
           l.source_url,
@@ -562,6 +607,7 @@ export class ScraperDbClient {
         r.currency_symbol,
         r.estimate_min,
         r.estimate_max,
+        r.lot_ref,
         r.lot_number,
         r.sale_type,
         r.source_url,
@@ -608,8 +654,15 @@ export class ScraperDbClient {
         || (isPublishedAssetPath(srcImagePath) ? srcImagePath : null)
         || (isPublishedAssetPath(gcsImagePath) ? gcsImagePath : null)
         || rawImagePath;
+      const sourceUrl = deriveInvaluableLotUrl({
+        sourceUrl: row.source_url || null,
+        title: row.title || null,
+        lotRef: row.lot_ref || null,
+        lotNumber: row.lot_number || null,
+      });
       return {
         lotUid: String(row.lot_uid),
+        lotRef: row.lot_ref || null,
         title: row.title || null,
         description: row.description || null,
         houseName: row.house_name || null,
@@ -621,7 +674,7 @@ export class ScraperDbClient {
         estimateMax,
         lotNumber: row.lot_number || null,
         saleType: row.sale_type || null,
-        sourceUrl: row.source_url || null,
+        sourceUrl,
         imagePath,
         imageFileName: row.image_filename || null,
       };

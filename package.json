@@ -8,7 +8,7 @@
     "build": "npm run env:check && npx rimraf dist && npx tsc --project tsconfig.node.json",
     "start": "node dist/server.js",
     "lint": "eslint .",
-    "test": "vitest run",
+    "test": "vitest run src",
     "smoke": "node scripts/smoke/valuer-bridge-smoke.mjs",
     "smoke:deploy": "node scripts/smoke/deploy-smoke.mjs",
     "smoke:env": "node scripts/smoke/runtime-env-smoke.mjs",
