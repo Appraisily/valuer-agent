@@ -18,6 +18,7 @@
     "predev": "npm run env:check"
   },
   "dependencies": {
+    "@appraisily/messaging": "file:/srv/repos/shared/messaging",
     "amqplib": "^0.10.9",
     "express": "^4.22.2",
     "pg": "^8.16.3",

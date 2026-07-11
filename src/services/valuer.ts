@@ -156,8 +156,8 @@ export class ValuerService {
           auctionDate: lot.auctionDate,
           price: lot.priceRealised !== null ? {
             amount: lot.priceRealised,
-            currency: lot.currency || 'USD',
-            symbol: lot.currencySymbol || '$',
+            currency: lot.currency || null,
+            symbol: lot.currencySymbol || null,
           } : undefined,
           priceRealised: lot.priceRealised,
           currency: lot.currency || null,

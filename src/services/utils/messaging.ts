@@ -1,6 +1,6 @@
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore - CommonJS module without types
-import messagingModule from '../../../../_shared/messaging/index.js';
+import messagingModule from '@appraisily/messaging';
 
 type Broker = {
   publish: (opts: {

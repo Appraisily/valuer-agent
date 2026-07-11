@@ -131,4 +131,28 @@ describe('ValuerService image contract', () => {
       expect(lot.lot_ref).toBe('ABC123DEF0');
     });
   });
+
+  it('preserves missing scraper currency instead of coercing it to USD', async () => {
+    await withPublicAssetsRoot(async () => {
+      const service = new ValuerService({
+        scraperDb: {
+          searchLots: async (_params: ScraperDbSearchParams) => [
+            baseLot({ currency: null, currencySymbol: null }),
+          ],
+          close: async () => undefined,
+        },
+      });
+
+      const result = await service.batchSearch({ searches: [{ query: 'unknown currency lot', limit: 1 }] });
+      const lot = result.searches[0].result.data.lots[0];
+
+      expect(lot.price).toMatchObject({
+        amount: 1200,
+        currency: null,
+        symbol: null,
+      });
+      expect(lot.currencyCode).toBeNull();
+      expect(lot.currencySymbol).toBeNull();
+    });
+  });
 });

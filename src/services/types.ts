@@ -7,8 +7,8 @@ export interface ValuerLot {
   description?: string | null;
   price?: {
     amount?: number;
-    currency?: string;
-    symbol?: string;
+    currency?: string | null;
+    symbol?: string | null;
   };
   auctionHouse?: string | null;
   houseName?: string | null;

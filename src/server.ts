@@ -2,6 +2,8 @@ import express, { Request, Response, NextFunction } from 'express';
 import type { RequestHandler } from 'express';
 import { z, ZodError } from 'zod';
 import { createRequire } from 'node:module';
+import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { ValuerService } from './services/valuer.js';
 import { archiveJSON, storageEnabled } from './services/utils/local-storage.js';
 import { messagingEnabled, publishEvent, closeBroker } from './services/utils/messaging.js';
@@ -13,7 +15,7 @@ type CompactLot = {
   lot_ref?: string;
   lotId?: string;
   title?: string;
-  price?: { amount?: number; currency?: string; symbol?: string };
+  price?: { amount?: number; currency?: string | null; symbol?: string | null };
   auctionHouse?: string;
   date?: string;
   url?: string;
@@ -30,10 +32,22 @@ type CompactLot = {
 };
 
 type TermWithTier = { term: string; tier: string };
+type CurrencyComparabilityStatus = 'single' | 'mixed' | 'unknown' | 'none';
+type CurrencyComparabilitySummary = {
+  status: CurrencyComparabilityStatus;
+  valuesComparable: boolean;
+  currency: string | null;
+  currencies: string[];
+  pricedLots: number;
+  unknownCurrencyLots: number;
+  note?: string;
+};
 
 const shouldArchiveResponses = String(process.env.VALUER_ARCHIVE_RESPONSES ?? process.env.SAVE_VALUER_RESPONSES ?? 'false').toLowerCase() === 'true';
 const archivePrefix = process.env.VALUER_ARCHIVE_PREFIX ?? 'valuer-bridge/responses';
 const eventRoutingKey = process.env.MESSAGE_ROUTING_KEY ?? 'valuer.http.completed';
+const maxBatchTerms = intFromEnv('VALUER_BATCH_MAX_TERMS', 25);
+const maxTermLength = intFromEnv('VALUER_BATCH_MAX_TERM_LENGTH', 160);
 
 const valuer = new ValuerService();
 const app = express();
@@ -87,6 +101,80 @@ function numberOrUndefined(value: unknown): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
+function normalizeCurrencyCode(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim().toUpperCase();
+  if (!trimmed || trimmed === 'UNKNOWN' || trimmed === 'N/A' || trimmed === 'NULL') return null;
+  return trimmed;
+}
+
+function summarizeComparableCurrencies(lots: CompactLot[]): CurrencyComparabilitySummary {
+  const currencies = new Set<string>();
+  let pricedLots = 0;
+  let unknownCurrencyLots = 0;
+
+  for (const lot of lots) {
+    const amount = lot?.price?.amount;
+    if (typeof amount !== 'number' || !Number.isFinite(amount)) continue;
+    pricedLots += 1;
+
+    const currency = normalizeCurrencyCode(lot.price?.currency);
+    if (currency) currencies.add(currency);
+    else unknownCurrencyLots += 1;
+  }
+
+  const currencyList = Array.from(currencies).sort();
+  if (pricedLots === 0) {
+    return {
+      status: 'none',
+      valuesComparable: false,
+      currency: null,
+      currencies: [],
+      pricedLots,
+      unknownCurrencyLots,
+      note: 'No priced comparables were returned.',
+    };
+  }
+
+  if (currencyList.length === 1 && unknownCurrencyLots === 0) {
+    return {
+      status: 'single',
+      valuesComparable: true,
+      currency: currencyList[0],
+      currencies: currencyList,
+      pricedLots,
+      unknownCurrencyLots,
+    };
+  }
+
+  if (currencyList.length === 0) {
+    return {
+      status: 'unknown',
+      valuesComparable: false,
+      currency: null,
+      currencies: [],
+      pricedLots,
+      unknownCurrencyLots,
+      note: 'Comparable prices are present, but their currencies are unknown.',
+    };
+  }
+
+  return {
+    status: 'mixed',
+    valuesComparable: false,
+    currency: null,
+    currencies: currencyList,
+    pricedLots,
+    unknownCurrencyLots,
+    note: 'Comparable prices include multiple or missing currencies; convert or exclude before valuation math.',
+  };
+}
+
+function intFromEnv(name: string, fallback: number, min = 1): number {
+  const parsed = Number.parseInt(process.env[name] || '', 10);
+  return Number.isFinite(parsed) && parsed >= min ? parsed : fallback;
+}
+
 function buildSearches(combined: TermWithTier[], minPrice: number, maxPrice: number | undefined, limitPerTerm: number, sort: string) {
   return combined.map(({ term }) => {
     const priceResult: Record<string, string> = { min: String(minPrice) };
@@ -94,6 +182,8 @@ function buildSearches(combined: TermWithTier[], minPrice: number, maxPrice: num
     return { query: term, priceResult, limit: limitPerTerm, sort };
   });
 }
+
+const TermArraySchema = z.array(z.string().trim().min(1).max(maxTermLength)).max(maxBatchTerms);
 
 const V2BatchSchema = z.object({
   schemaVersion: z.string().optional(),
@@ -121,10 +211,10 @@ const V2BatchSchema = z.object({
     sort: z.string().optional(),
   }).optional(),
   terms: z.object({
-    very_specific: z.array(z.string()).optional(),
-    specific: z.array(z.string()).optional(),
-    moderate: z.array(z.string()).optional(),
-    flattened: z.array(z.string()).optional(),
+    very_specific: TermArraySchema.optional(),
+    specific: TermArraySchema.optional(),
+    moderate: TermArraySchema.optional(),
+    flattened: TermArraySchema.optional(),
   }),
 });
 
@@ -153,6 +243,12 @@ async function executeBatchSearch(parsed: z.infer<typeof V2BatchSchema>, correla
     const err = new Error('Provide non-empty terms. Valuer Bridge does not generate search terms.');
     (err as any).status = 400;
     (err as any).code = 'terms_required';
+    throw err;
+  }
+  if (combined.length > maxBatchTerms) {
+    const err = new Error(`Valuer Bridge accepts at most ${maxBatchTerms} search terms per request.`);
+    (err as any).status = 400;
+    (err as any).code = 'too_many_terms';
     throw err;
   }
 
@@ -225,8 +321,8 @@ async function executeBatchSearch(parsed: z.infer<typeof V2BatchSchema>, correla
       const priceAmount = (lot?.price && typeof lot.price.amount === 'number')
         ? lot.price.amount
         : (typeof lot?.priceResult === 'number' ? lot.priceResult : undefined);
-      const currency = lot?.price?.currency || lot?.currency || lot?.currencyCode || 'USD';
-      const symbol = lot?.price?.symbol || lot?.currencySymbol || '$';
+      const currency = lot?.price?.currency || lot?.currency || lot?.currencyCode || null;
+      const symbol = lot?.price?.symbol || lot?.currencySymbol || null;
       const lotUid: string | undefined = lot?.lot_uid || lot?.lotUid || lot?.id || lot?.lotId;
       const lotRef: string | undefined = lot?.lotRef || lot?.lot_ref;
       const sourceUrl = lot?.url || lot?.lotUrl || lot?.lot_url || lot?.sourceUrl || lot?.source_url;
@@ -238,7 +334,7 @@ async function executeBatchSearch(parsed: z.infer<typeof V2BatchSchema>, correla
         lot_ref: lotRef ? String(lotRef) : undefined,
         lotId: lotUid ? String(lotUid) : undefined,
         title,
-        price: priceAmount ? { amount: priceAmount, currency, symbol } : undefined,
+        price: typeof priceAmount === 'number' && Number.isFinite(priceAmount) ? { amount: priceAmount, currency, symbol } : undefined,
         auctionHouse: lot?.auctionHouse || lot?.house || lot?.houseName,
         date: lot?.date || lot?.dateTimeLocal || lot?.auctionDate,
         url: sourceUrl,
@@ -275,6 +371,7 @@ async function executeBatchSearch(parsed: z.infer<typeof V2BatchSchema>, correla
     summary: {
       totalItems: aggregated.length,
       uniqueLots: uniqueComparableKeys.size,
+      currency: summarizeComparableCurrencies(aggregated),
       durationMs,
     },
     meta: { schemaVersion, context },
@@ -432,6 +529,14 @@ async function gracefulShutdown(signal: string) {
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
-app.listen(port, () => {
-  console.log(`Valuer Bridge listening on port ${port} with scraper_db provider`);
-});
+function isDirectRun() {
+  return Boolean(process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href);
+}
+
+if (isDirectRun()) {
+  app.listen(port, () => {
+    console.log(`Valuer Bridge listening on port ${port} with scraper_db provider`);
+  });
+}
+
+export { app, executeBatchSearch, summarizeComparableCurrencies };
