@@ -13,7 +13,7 @@
     "smoke:deploy": "node scripts/smoke/deploy-smoke.mjs",
     "smoke:env": "node scripts/smoke/runtime-env-smoke.mjs",
     "smoke:logs": "node scripts/smoke/log-smoke.mjs",
-    "env:check": "node ../../env-governance/run-check.mjs --schema services/valuer-agent",
+    "env:check": "node ../../env-governance/run-check.mjs --schema services/valuer-bridge",
     "prestart": "npm run env:check",
     "predev": "npm run env:check"
   },

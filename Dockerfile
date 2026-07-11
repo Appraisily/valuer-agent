@@ -2,7 +2,7 @@ FROM node:20-slim AS builder
 
 WORKDIR /usr/src/app
 
-ARG SERVICE_DIR=services/valuer-agent
+ARG SERVICE_DIR=services/valuer-bridge
 ARG SHARED_DIR=services/_shared
 ARG ENV_GOVERNANCE_DIR=env-governance
 
@@ -23,8 +23,8 @@ COPY ${ENV_GOVERNANCE_DIR}/ /usr/env-governance/
 
 # Prepare ENV_GOV_REPO_ROOT so env-governance can locate the schema (.env.names)
 ENV ENV_GOV_REPO_ROOT=/usr/src/env-check
-RUN mkdir -p /usr/src/env-check/services/valuer-agent \
-    && cp ./.env.names /usr/src/env-check/services/valuer-agent/.env.names
+RUN mkdir -p /usr/src/env-check/services/valuer-bridge \
+    && cp ./.env.names /usr/src/env-check/services/valuer-bridge/.env.names
 
 # Build-time env-check requires the schema keys to exist, but those values do not
 # ship to the runtime image. Generate a placeholder env file directly from

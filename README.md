@@ -123,5 +123,5 @@ The deploy smoke is wired into the VPS deploy helper. Candidate deploys run the 
 For runtime env schema validation:
 
 ```bash
-ENV_GOV_ENV_FILE=/srv/infrastructure/vps-infra/compose/appraisily/runtime/docker-compose/valuer-agent/runtime.env npm run env:check
+ENV_GOV_ENV_FILE=/srv/infrastructure/vps-infra/compose/appraisily/runtime/docker-compose/valuer-bridge/runtime.env npm run env:check
 ```
