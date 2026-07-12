@@ -2,6 +2,10 @@ import pg from 'pg';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import {
+  validateComparableLot,
+  type CanonicalComparableLotV1,
+} from '@appraisily/auction-contracts';
 
 type CurrencyCode = string | null | undefined;
 type NullableString = string | null | undefined;
@@ -150,6 +154,23 @@ export type ScraperDbLot = {
   imagePath: string | null;
   imageFileName: string | null;
 };
+
+export function toCanonicalComparableLot(lot: ScraperDbLot): CanonicalComparableLotV1 {
+  const comparable: CanonicalComparableLotV1 = {
+    schemaVersion: 1,
+    lotUid: lot.lotUid,
+    title: lot.title,
+    description: lot.description,
+    houseName: lot.houseName,
+    auctionDate: lot.auctionDate,
+    priceRealised: lot.priceRealised,
+    currency: lot.currency,
+    estimateMin: lot.estimateMin,
+    estimateMax: lot.estimateMax,
+    sourceUrl: lot.sourceUrl,
+  };
+  return validateComparableLot(comparable);
+}
 
 function normalizeBaseUrl(value: string | undefined | null, fallback: string): string {
   const raw = (value || '').trim();
@@ -660,7 +681,7 @@ export class ScraperDbClient {
         lotRef: row.lot_ref || null,
         lotNumber: row.lot_number || null,
       });
-      return {
+      const lot: ScraperDbLot = {
         lotUid: String(row.lot_uid),
         lotRef: row.lot_ref || null,
         title: row.title || null,
@@ -678,6 +699,8 @@ export class ScraperDbClient {
         imagePath,
         imageFileName: row.image_filename || null,
       };
+      toCanonicalComparableLot(lot);
+      return lot;
     });
   }
 

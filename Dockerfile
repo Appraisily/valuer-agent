@@ -9,6 +9,7 @@ ARG ENV_GOVERNANCE_DIR=env-governance
 COPY ${SERVICE_DIR}/package*.json ./
 COPY shared/messaging /srv/repos/shared/messaging
 COPY shared/messaging /usr/shared/messaging
+COPY services/scraper-orchestrator/packages/auction-contracts /usr/src/scraper-orchestrator/packages/auction-contracts
 RUN npm install --install-links
 
 COPY ${SERVICE_DIR}/ ./

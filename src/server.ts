@@ -7,6 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { ValuerService } from './services/valuer.js';
 import { archiveJSON, storageEnabled } from './services/utils/local-storage.js';
 import { messagingEnabled, publishEvent, closeBroker } from './services/utils/messaging.js';
+import { CONTRACT_VERSIONS } from '@appraisily/auction-contracts';
 
 type CompactLot = {
   id?: string;
@@ -454,6 +455,7 @@ app.get('/health', (_req: Request, res: Response) => {
   res.status(200).json({
     status: 'ok',
     service: 'valuer-bridge',
+    auctionContracts: CONTRACT_VERSIONS,
     ...valuer.getReadiness(),
   });
 });
