@@ -46,8 +46,12 @@ export class ValuerService {
   private async publishLotThumbs(lotUids: string[]): Promise<ThumbPublishResult> {
     if (this.thumbPublisher) return this.thumbPublisher(lotUids);
 
-    const publishUrl = String(process.env.SCRAPPER_THUMBS_PUBLISH_URL || 'http://scrapper:8080/api/lot-thumbs/publish').trim();
-    const apiKey = String(process.env.SCRAPPER_INTERNAL_API_KEY || '').trim();
+    const publishUrl = String(
+      process.env.SCRAPER_ORCHESTRATOR_THUMBS_PUBLISH_URL ||
+      process.env.SCRAPPER_THUMBS_PUBLISH_URL ||
+      'http://scraper-orchestrator:8080/api/lot-thumbs/publish'
+    ).trim();
+    const apiKey = String(process.env.INGEST_API_KEY || process.env.SCRAPPER_INTERNAL_API_KEY || '').trim();
     if (!publishUrl || !apiKey) return new Map();
 
     const limit = (() => {
