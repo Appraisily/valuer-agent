@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ScraperDbClient } from '../services/scraper-db.js';
+import { AuctionDataApiClient } from '../services/auction-data-api.js';
 
 describe('Auction Data API comparable client', () => {
   afterEach(() => vi.restoreAllMocks());
@@ -34,7 +34,7 @@ describe('Auction Data API comparable client', () => {
       ],
     }), { status: 200, headers: { 'content-type': 'application/json' } }));
 
-    const client = new ScraperDbClient();
+    const client = new AuctionDataApiClient();
     const lots = await client.searchLots({ query: 'Wedgwood jasperware vase', minPrice: 100, limit: 5 });
 
     expect(lots.map(lot => lot.lotUid)).toEqual(['lot-a']);

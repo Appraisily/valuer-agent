@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildLotImageAssetContract, deriveInvaluableLotUrl } from '../services/scraper-db.js';
+import { buildLotImageAssetContract, deriveInvaluableLotUrl } from '../services/auction-data-api.js';
 
 function withPublicAssetsBase<T>(fn: () => T): T {
   const previousBase = process.env.PUBLIC_ASSETS_BASE_URL;

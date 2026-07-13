@@ -545,7 +545,7 @@ function isDirectRun() {
 
 if (isDirectRun()) {
   app.listen(port, () => {
-    console.log(`Valuer Bridge listening on port ${port} with scraper_db provider`);
+    console.log(`Valuer Bridge listening on port ${port} with auction_data_api provider`);
   });
 }
 

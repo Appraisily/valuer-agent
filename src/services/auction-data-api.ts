@@ -7,14 +7,14 @@ import { recordUpstreamSearch } from './metrics.js';
 type CurrencyCode = string | null | undefined;
 type NullableString = string | null | undefined;
 
-export type ScraperDbSearchParams = {
+export type AuctionDataApiSearchParams = {
   query: string;
   minPrice?: number;
   maxPrice?: number;
   limit?: number;
 };
 
-export type ScraperDbSearchOptions = {
+export type AuctionDataApiSearchOptions = {
   deadlineAt?: number;
   timeoutMs?: number;
 };
@@ -55,7 +55,7 @@ export class AuctionDataApiError extends Error {
   }
 }
 
-export type ScraperDbLot = {
+export type AuctionDataApiLot = {
   lotUid: string;
   lotRef: string | null;
   title: string | null;
@@ -78,7 +78,7 @@ export type ScraperDbLot = {
   assetVerifiedAt: string | null;
 };
 
-export function toCanonicalComparableLot(lot: ScraperDbLot): CanonicalComparableLotV1 {
+export function toCanonicalComparableLot(lot: AuctionDataApiLot): CanonicalComparableLotV1 {
   const comparable: CanonicalComparableLotV1 = {
     schemaVersion: 1,
     lotUid: lot.lotUid,
@@ -272,7 +272,7 @@ export function buildLotImageAssetContract(relativePath: NullableString): LotIma
   };
 }
 
-export class ScraperDbClient {
+export class AuctionDataApiClient {
   private dataApiUrl: string;
   private dataApiKey: string;
   private assetsBaseUrl: string;
@@ -332,7 +332,7 @@ export class ScraperDbClient {
     }
   }
 
-  async searchLots(params: ScraperDbSearchParams, options: ScraperDbSearchOptions = {}): Promise<ScraperDbLot[]> {
+  async searchLots(params: AuctionDataApiSearchParams, options: AuctionDataApiSearchOptions = {}): Promise<AuctionDataApiLot[]> {
     const startedAt = Date.now();
     const query = String(params.query || '').trim();
     if (!query) return [];
@@ -398,7 +398,7 @@ export class ScraperDbClient {
         lotRef: row.lotRef || null,
         lotNumber: row.lotNumber || null,
       });
-      const lot: ScraperDbLot = {
+      const lot: AuctionDataApiLot = {
         lotUid: String(row.lotUid),
         lotRef: row.lotRef || null,
         title: row.title || null,

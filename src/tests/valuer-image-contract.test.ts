@@ -3,9 +3,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { ValuerService } from '../services/valuer.js';
-import type { ScraperDbLot, ScraperDbSearchParams } from '../services/scraper-db.js';
+import type { AuctionDataApiLot, AuctionDataApiSearchParams } from '../services/auction-data-api.js';
 
-function baseLot(overrides: Partial<ScraperDbLot> = {}): ScraperDbLot {
+function baseLot(overrides: Partial<AuctionDataApiLot> = {}): AuctionDataApiLot {
   return {
     lotUid: 'lot-1',
     lotRef: null,
@@ -56,8 +56,8 @@ describe('ValuerService image contract', () => {
       fs.writeFileSync(absolutePath, 'image');
 
       const service = new ValuerService({
-        scraperDb: {
-          searchLots: async (_params: ScraperDbSearchParams) => [
+        auctionDataApi: {
+          searchLots: async (_params: AuctionDataApiSearchParams) => [
             baseLot({ imagePath: 'legacy-art/images/lot-1.jpg' }),
           ],
           close: async () => undefined,
@@ -82,8 +82,8 @@ describe('ValuerService image contract', () => {
   it('does not publish unverified fallback image URLs from the publisher response', async () => {
     await withPublicAssetsRoot(async () => {
       const service = new ValuerService({
-        scraperDb: {
-          searchLots: async (_params: ScraperDbSearchParams) => [
+        auctionDataApi: {
+          searchLots: async (_params: AuctionDataApiSearchParams) => [
             baseLot({ imagePath: 'legacy-art/images/lot-1.jpg' }),
           ],
           close: async () => undefined,
@@ -104,8 +104,8 @@ describe('ValuerService image contract', () => {
   it('emits the canonical source URL field for scraper DB lots', async () => {
     await withPublicAssetsRoot(async () => {
       const service = new ValuerService({
-        scraperDb: {
-          searchLots: async (_params: ScraperDbSearchParams) => [
+        auctionDataApi: {
+          searchLots: async (_params: AuctionDataApiSearchParams) => [
             baseLot({
               lotUid: '130582130',
               lotRef: 'ABC123DEF0',
@@ -130,8 +130,8 @@ describe('ValuerService image contract', () => {
   it('preserves missing scraper currency instead of coercing it to USD', async () => {
     await withPublicAssetsRoot(async () => {
       const service = new ValuerService({
-        scraperDb: {
-          searchLots: async (_params: ScraperDbSearchParams) => [
+        auctionDataApi: {
+          searchLots: async (_params: AuctionDataApiSearchParams) => [
             baseLot({ currency: null, currencySymbol: null }),
           ],
           close: async () => undefined,

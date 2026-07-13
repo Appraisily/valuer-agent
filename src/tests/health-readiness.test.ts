@@ -1,6 +1,6 @@
 import { createServer, type RequestListener, type Server } from 'node:http';
 import { afterEach, describe, expect, it } from 'vitest';
-import { ScraperDbClient, resolveAuctionDataApiConfig } from '../services/scraper-db.js';
+import { AuctionDataApiClient, resolveAuctionDataApiConfig } from '../services/auction-data-api.js';
 
 const servers: Server[] = [];
 
@@ -38,7 +38,7 @@ describe('Auction Data API readiness', () => {
       res.writeHead(healthy ? 200 : 503, { 'content-type': 'application/json' });
       res.end(JSON.stringify(healthy ? { success: true } : { success: false }));
     });
-    const client = new ScraperDbClient({ dataApiUrl: baseUrl, dataApiKey: 'test-key' });
+    const client = new AuctionDataApiClient({ dataApiUrl: baseUrl, dataApiKey: 'test-key' });
 
     await expect(client.checkReadiness(500)).resolves.toMatchObject({
       ready: false,
@@ -63,7 +63,7 @@ describe('Auction Data API readiness', () => {
         }
       }, 250);
     });
-    const client = new ScraperDbClient({ dataApiUrl: baseUrl, dataApiKey: 'test-key' });
+    const client = new AuctionDataApiClient({ dataApiUrl: baseUrl, dataApiKey: 'test-key' });
     const startedAt = Date.now();
 
     await expect(client.checkReadiness(100)).resolves.toMatchObject({

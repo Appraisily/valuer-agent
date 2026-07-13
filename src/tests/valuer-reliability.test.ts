@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { AuctionDataApiError, type ScraperDbLot } from '../services/scraper-db.js';
-import { ValuerService } from '../services/valuer.js';
+import { AuctionDataApiError, type AuctionDataApiLot } from '../services/auction-data-api.js';
+import { resolveValuerEnvSetting, ValuerService } from '../services/valuer.js';
 
-const lot: ScraperDbLot = {
+const lot: AuctionDataApiLot = {
   lotUid: 'lot-1', lotRef: null, title: 'Fixture lot', description: null,
   houseName: 'Fixture House', auctionDate: '2026-01-01T00:00:00.000Z',
   priceRealised: 100, currency: 'USD', currencySymbol: '$', estimateMin: null,
@@ -21,7 +21,7 @@ describe('Valuer request budgets', () => {
     const searchLots = vi.fn()
       .mockRejectedValueOnce(new AuctionDataApiError('auction_data_api_503', { status: 503, transient: true }))
       .mockResolvedValueOnce([lot]);
-    const service = new ValuerService({ scraperDb: { searchLots, close: async () => undefined } });
+    const service = new ValuerService({ auctionDataApi: { searchLots, close: async () => undefined } });
     const result = await service.batchSearch(
       { searches: [{ query: 'fixture' }], skipThumbPublish: true },
       { timeoutMs: 2_000, retry: { attempts: 2, baseDelayMs: 10 } },
@@ -33,7 +33,7 @@ describe('Valuer request budgets', () => {
 
   it('does not retry deterministic client failures or empty results', async () => {
     const permanent = vi.fn().mockRejectedValue(new AuctionDataApiError('invalid_search_request', { status: 400, transient: false }));
-    const failedService = new ValuerService({ scraperDb: { searchLots: permanent, close: async () => undefined } });
+    const failedService = new ValuerService({ auctionDataApi: { searchLots: permanent, close: async () => undefined } });
     const failed = await failedService.batchSearch(
       { searches: [{ query: 'bad' }], skipThumbPublish: true },
       { timeoutMs: 2_000, retry: { attempts: 3, baseDelayMs: 10 } },
@@ -42,7 +42,7 @@ describe('Valuer request budgets', () => {
     expect(failed.searches[0].diagnostic).toMatchObject({ retryable: false, upstreamStatus: 400 });
 
     const empty = vi.fn().mockResolvedValue([]);
-    const emptyService = new ValuerService({ scraperDb: { searchLots: empty, close: async () => undefined } });
+    const emptyService = new ValuerService({ auctionDataApi: { searchLots: empty, close: async () => undefined } });
     const result = await emptyService.batchSearch(
       { searches: [{ query: 'known empty' }], skipThumbPublish: true },
       { timeoutMs: 2_000, retry: { attempts: 3, baseDelayMs: 10 } },
@@ -57,7 +57,7 @@ describe('Valuer request budgets', () => {
       if (params.query === 'ok') return [lot];
       throw new AuctionDataApiError('auction_data_api_timeout', { transient: true });
     });
-    const service = new ValuerService({ scraperDb: { searchLots, close: async () => undefined } });
+    const service = new ValuerService({ auctionDataApi: { searchLots, close: async () => undefined } });
     const result = await service.batchSearch(
       { searches: [{ query: 'ok' }, { query: 'timeout' }], concurrency: 1, skipThumbPublish: true },
       { timeoutMs: 100, retry: { attempts: 3, baseDelayMs: 100 } },
@@ -71,12 +71,25 @@ describe('Valuer request budgets', () => {
   it('opens the circuit after repeated transient transport failures', async () => {
     process.env.AUCTION_DATA_API_CIRCUIT_FAILURES = '2';
     const searchLots = vi.fn().mockRejectedValue(new AuctionDataApiError('auction_data_api_503', { status: 503, transient: true }));
-    const service = new ValuerService({ scraperDb: { searchLots, close: async () => undefined } });
+    const service = new ValuerService({ auctionDataApi: { searchLots, close: async () => undefined } });
     const result = await service.batchSearch(
       { searches: [{ query: 'one' }, { query: 'two' }, { query: 'three' }], concurrency: 1, skipThumbPublish: true },
       { timeoutMs: 2_000, retry: { attempts: 1 } },
     );
     expect(searchLots).toHaveBeenCalledTimes(2);
     expect(result.searches[2].error).toBe('auction_data_api_circuit_open');
+  });
+});
+
+describe('Valuer compatibility settings', () => {
+  it('prefers canonical settings and retains a legacy-only fallback', () => {
+    expect(resolveValuerEnvSetting('VALUER_CONCURRENCY', 'SCRAPER_DB_CONCURRENCY', {
+      VALUER_CONCURRENCY: '6',
+      SCRAPER_DB_CONCURRENCY: '2',
+    })).toBe('6');
+    expect(resolveValuerEnvSetting('VALUER_CONCURRENCY', 'SCRAPER_DB_CONCURRENCY', {
+      SCRAPER_DB_CONCURRENCY: '2',
+    })).toBe('2');
+    expect(resolveValuerEnvSetting('VALUER_CONCURRENCY', 'SCRAPER_DB_CONCURRENCY', {})).toBe('');
   });
 });

@@ -1,6 +1,29 @@
 import { ValuerResponse, ValuerLot } from './types.js';
-import { AuctionDataApiError, ScraperDbClient, buildLotImageAssetContract } from './scraper-db.js';
+import { AuctionDataApiClient, AuctionDataApiError, buildLotImageAssetContract } from './auction-data-api.js';
 import { recordBatchOutcome } from './metrics.js';
+
+const warnedLegacyValuerSettings = new Set<string>();
+
+export function resolveValuerEnvSetting(
+  canonicalName: string,
+  legacyName: string,
+  env: Record<string, string | undefined> = process.env,
+): string {
+  const canonicalValue = String(env[canonicalName] || '').trim();
+  if (canonicalValue) return canonicalValue;
+  return String(env[legacyName] || '').trim();
+}
+
+function readValuerEnvSetting(canonicalName: string, legacyName: string): string {
+  const value = resolveValuerEnvSetting(canonicalName, legacyName);
+  if (!String(process.env[canonicalName] || '').trim()
+    && String(process.env[legacyName] || '').trim()
+    && !warnedLegacyValuerSettings.has(legacyName)) {
+    warnedLegacyValuerSettings.add(legacyName);
+    console.warn(`[env] ${legacyName} is deprecated; use ${canonicalName}`);
+  }
+  return value;
+}
 
 if (process.env.SCRAPPER_THUMBS_PUBLISH_URL && !process.env.SCRAPER_ORCHESTRATOR_THUMBS_PUBLISH_URL) {
   console.warn('[env] SCRAPPER_THUMBS_PUBLISH_URL is deprecated; use SCRAPER_ORCHESTRATOR_THUMBS_PUBLISH_URL');
@@ -24,17 +47,17 @@ type BatchSearchBody = {
   skipThumbPublish?: boolean;
 };
 
-type ScraperDbReader = Pick<ScraperDbClient, 'searchLots' | 'close'> & Partial<Pick<ScraperDbClient, 'checkReadiness'>>;
+type AuctionDataApiReader = Pick<AuctionDataApiClient, 'searchLots' | 'close'> & Partial<Pick<AuctionDataApiClient, 'checkReadiness'>>;
 type ThumbPublishResult = Map<string, { thumbUrl: string | null; srcPath: string | null }>;
 
 export class ValuerService {
-  private scraperDb: ScraperDbReader;
+  private auctionDataApi: AuctionDataApiReader;
   private thumbPublisher?: (lotUids: string[]) => Promise<ThumbPublishResult>;
   private transportFailures = 0;
   private circuitOpenUntil = 0;
 
-  constructor(deps: { scraperDb?: ScraperDbReader; thumbPublisher?: (lotUids: string[]) => Promise<ThumbPublishResult> } = {}) {
-    this.scraperDb = deps.scraperDb || new ScraperDbClient();
+  constructor(deps: { auctionDataApi?: AuctionDataApiReader; thumbPublisher?: (lotUids: string[]) => Promise<ThumbPublishResult> } = {}) {
+    this.auctionDataApi = deps.auctionDataApi || new AuctionDataApiClient();
     this.thumbPublisher = deps.thumbPublisher;
   }
 
@@ -43,7 +66,7 @@ export class ValuerService {
   }
 
   async checkReadiness(timeoutMs?: number) {
-    if (!this.scraperDb.checkReadiness) {
+    if (!this.auctionDataApi.checkReadiness) {
       return {
         ready: false,
         status: null,
@@ -51,15 +74,15 @@ export class ValuerService {
         latencyMs: 0,
       };
     }
-    return this.scraperDb.checkReadiness(timeoutMs);
+    return this.auctionDataApi.checkReadiness(timeoutMs);
   }
 
   async close(): Promise<void> {
-    await this.scraperDb.close();
+    await this.auctionDataApi.close();
   }
 
   async batchSearch(body: BatchSearchBody, options: SearchOptions = {}): Promise<any> {
-    return this.batchSearchScraperDb(body, options);
+    return this.batchSearchAuctionDataApi(body, options);
   }
 
   private async publishLotThumbs(lotUids: string[]): Promise<ThumbPublishResult> {
@@ -74,7 +97,7 @@ export class ValuerService {
     if (!publishUrl || !apiKey) return new Map();
 
     const limit = (() => {
-      const n = Number(process.env.SCRAPER_DB_PUBLISH_THUMBS_LIMIT);
+      const n = Number(readValuerEnvSetting('VALUER_PUBLISH_THUMBS_LIMIT', 'SCRAPER_DB_PUBLISH_THUMBS_LIMIT'));
       if (!Number.isFinite(n) || n <= 0) return 12;
       return Math.max(1, Math.min(100, Math.floor(n)));
     })();
@@ -173,7 +196,7 @@ export class ValuerService {
     params: { query: string; minPrice?: number; maxPrice?: number; limit?: number },
     options: SearchOptions,
     deadlineAt: number,
-  ): Promise<{ lots: Awaited<ReturnType<ScraperDbReader['searchLots']>>; attempts: number }> {
+  ): Promise<{ lots: Awaited<ReturnType<AuctionDataApiReader['searchLots']>>; attempts: number }> {
     const maxAttempts = Math.max(1, Math.min(4, Math.floor(options.retry?.attempts || 1)));
     const baseDelayMs = Math.max(10, Math.floor(options.retry?.baseDelayMs || 100));
     const maxDelayMs = Math.max(baseDelayMs, Math.floor(options.retry?.maxDelayMs || 750));
@@ -185,7 +208,7 @@ export class ValuerService {
       this.ensureCircuitAvailable();
       attempts += 1;
       try {
-        const lots = await this.scraperDb.searchLots(params, { deadlineAt });
+        const lots = await this.auctionDataApi.searchLots(params, { deadlineAt });
         this.recordTransportSuccess();
         return { lots, attempts };
       } catch (error) {
@@ -202,7 +225,7 @@ export class ValuerService {
     throw lastError || new AuctionDataApiError('auction_data_api_transport_error', { transient: true });
   }
 
-  private async batchSearchScraperDb(body: BatchSearchBody, options: SearchOptions): Promise<any> {
+  private async batchSearchAuctionDataApi(body: BatchSearchBody, options: SearchOptions): Promise<any> {
     const searches = Array.isArray(body?.searches) ? body.searches : [];
     const startedAt = new Date().toISOString();
     const requestedTimeout = Number(options.timeoutMs || process.env.VALUER_BATCH_HTTP_TIMEOUT_MS || 30_000);
@@ -210,14 +233,14 @@ export class ValuerService {
     const deadlineAt = Date.now() + timeoutMs;
     const skipThumbPublish = (() => {
       if (body.skipThumbPublish) return true;
-      const raw = String(process.env.SCRAPER_DB_PUBLISH_THUMBS_DISABLED || '').toLowerCase().trim();
+      const raw = readValuerEnvSetting('VALUER_PUBLISH_THUMBS_DISABLED', 'SCRAPER_DB_PUBLISH_THUMBS_DISABLED').toLowerCase();
       return raw === '1' || raw === 'true' || raw === 'yes';
     })();
 
     const concurrency = (() => {
       const requested = Number(body.concurrency);
       if (Number.isFinite(requested) && requested > 0) return Math.min(10, Math.floor(requested));
-      const env = Number(process.env.SCRAPER_DB_CONCURRENCY);
+      const env = Number(readValuerEnvSetting('VALUER_CONCURRENCY', 'SCRAPER_DB_CONCURRENCY'));
       if (Number.isFinite(env) && env > 0) return Math.min(10, Math.floor(env));
       return 4;
     })();
@@ -280,7 +303,7 @@ export class ValuerService {
         const reason = (settled as PromiseRejectedResult).reason;
         const errorCode = reason instanceof AuctionDataApiError
           ? reason.code
-          : String(reason?.message || reason || 'scraper_db_error');
+          : String(reason?.message || reason || 'auction_data_api_error');
         return {
           query: failedQuery,
           error: errorCode,
