@@ -128,7 +128,7 @@ const batchPayload = {
 
 console.log(`[smoke] baseUrl=${baseUrl}`);
 
-const live = await request('/live', { timeoutMs: Math.min(timeoutMs, 5_000) });
+const live = await waitForHealth('/live');
 assert(live.ok, '/live should return 2xx', live);
 assert(live.json?.status === 'ok', '/live should report status ok', live.json);
 assert(live.json?.service === 'valuer-bridge', '/live should identify valuer-bridge', live.json);
