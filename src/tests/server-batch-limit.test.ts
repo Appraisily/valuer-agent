@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-process.env.SCRAPER_DB_URL ||= 'postgres://user:pass@127.0.0.1:5432/valuer_test';
+process.env.AUCTION_DATA_API_KEY ||= 'test-data-api-key';
+process.env.AUCTION_DATA_API_URL ||= 'http://127.0.0.1:9';
 process.env.MESSAGE_TRANSPORT ||= 'disabled';
 
 async function postJson(baseUrl: string, path: string, body: unknown) {

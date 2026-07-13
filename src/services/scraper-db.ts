@@ -1,4 +1,3 @@
-import pg from 'pg';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
@@ -9,125 +8,6 @@ import {
 
 type CurrencyCode = string | null | undefined;
 type NullableString = string | null | undefined;
-
-const QUERY_STOPWORDS = new Set([
-  'a',
-  'an',
-  'and',
-  'are',
-  'as',
-  'at',
-  'by',
-  'for',
-  'from',
-  'in',
-  'into',
-  'is',
-  'it',
-  'of',
-  'on',
-  'or',
-  'the',
-  'to',
-  'with',
-]);
-
-// Very common lot/title tokens that should not be treated as "anchors" (artist/maker tokens).
-const QUERY_COMMON_TOKENS = new Set([
-  'acrylic',
-  'artist',
-  'bronze',
-  'canvas',
-  'ceramic',
-  'china',
-  'enamel',
-  'etching',
-  'frame',
-  'framed',
-  'giclee',
-  'gilt',
-  'glass',
-  'gold',
-  'hand',
-  'ivory',
-  'lithograph',
-  'marble',
-  'metal',
-  'mixed',
-  'oil',
-  'original',
-  'paint',
-  'painting',
-  'paper',
-  'plaster',
-  'porcelain',
-  'print',
-  'resin',
-  'silver',
-  'stone',
-  'serigraph',
-  'signed',
-  'sketch',
-  'watercolor',
-
-  // Sculpture-ish words that commonly lead queries but are too generic to anchor on.
-  'carved',
-  'carving',
-  'figure',
-  'figural',
-  'figurine',
-  'sculpture',
-  'sculptures',
-  'statue',
-  'wood',
-  'wooden',
-]);
-
-function tokenizeQuery(value: string): string[] {
-  return String(value || '')
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]+/g, ' ')
-    .split(/\s+/)
-    .map((t) => t.trim())
-    .filter(Boolean);
-}
-
-function buildAnchorTsQueries(query: string): { must: string | null; optionalOr: string | null } {
-  const tokens = tokenizeQuery(query);
-  if (!tokens.length) return { must: null, optionalOr: null };
-
-  // Prefer maker/subject-like tokens for anchors.
-  // Many user queries begin with generic phrases like "carved wood sculpture", which previously
-  // caused anchors to be ["carved","wood"] and returned irrelevant items (e.g., furniture).
-  const anchors: string[] = [];
-  for (const token of tokens) {
-    if (token.length < 3) continue;
-    if (QUERY_STOPWORDS.has(token)) continue;
-    if (QUERY_COMMON_TOKENS.has(token)) continue;
-    if (/^\d+$/.test(token)) continue;
-    anchors.push(token);
-    if (anchors.length >= 2) break;
-  }
-
-  if (!anchors.length) return { must: null, optionalOr: null };
-
-  const optional: string[] = [];
-  const optionalSeen = new Set<string>();
-  for (const token of tokens) {
-    if (token.length < 3) continue;
-    if (QUERY_STOPWORDS.has(token)) continue;
-    if (anchors.includes(token)) continue;
-    const key = token.toLowerCase();
-    if (optionalSeen.has(key)) continue;
-    optionalSeen.add(key);
-    optional.push(token);
-    if (optional.length >= 8) break;
-  }
-
-  const must = anchors.map((t) => `${t}:*`).join(' & ');
-  const optionalOr = optional.length ? optional.map((t) => `${t}:*`).join(' | ') : null;
-  return { must, optionalOr };
-}
 
 export type ScraperDbSearchParams = {
   query: string;
@@ -478,37 +358,17 @@ export function buildLotImageAssetContract(relativePath: NullableString): LotIma
 }
 
 export class ScraperDbClient {
-  private pool: pg.Pool;
+  private dataApiUrl: string;
+  private dataApiKey: string;
   private assetsBaseUrl: string;
 
   constructor() {
-    const connectionString = (
-      process.env.SCRAPER_DB_URL
-      || process.env.SCRAPER_DATABASE_URL
-      || process.env.SCRAPER_DB_CONNECTION_STRING
-      || ''
-    ).trim();
-    if (!connectionString) {
-      throw new Error('Missing SCRAPER_DB_URL (or SCRAPER_DATABASE_URL)');
-    }
-
-    const sslMode = String(process.env.SCRAPER_DB_SSL ?? '').toLowerCase();
-    const ssl = (sslMode === '1' || sslMode === 'true')
-      ? { rejectUnauthorized: false }
-      : false;
-
-    const queryTimeoutMs = (() => {
-      const v = Number(process.env.SCRAPER_DB_QUERY_TIMEOUT_MS);
-      if (Number.isFinite(v) && v > 0) return Math.floor(v);
-      return 10_000;
-    })();
-
-    this.pool = new pg.Pool({
-      connectionString,
-      ssl,
-      query_timeout: queryTimeoutMs,
-      max: Math.max(1, Math.min(10, Number(process.env.SCRAPER_DB_POOL_SIZE || 4))),
-    });
+    this.dataApiUrl = normalizeBaseUrl(
+      process.env.AUCTION_DATA_API_URL,
+      'http://scraper-orchestrator:8080',
+    );
+    this.dataApiKey = String(process.env.AUCTION_DATA_API_KEY || process.env.INGEST_API_KEY || '').trim();
+    if (!this.dataApiKey) throw new Error('Missing AUCTION_DATA_API_KEY');
 
     this.assetsBaseUrl = normalizeBaseUrl(
       process.env.PUBLIC_ASSETS_BASE_URL || process.env.LOCAL_STORAGE_BASE_URL_PUBLIC || process.env.LOCAL_STORAGE_BASE_URL,
@@ -516,9 +376,7 @@ export class ScraperDbClient {
     );
   }
 
-  async close(): Promise<void> {
-    await this.pool.end();
-  }
+  async close(): Promise<void> {}
 
   async searchLots(params: ScraperDbSearchParams): Promise<ScraperDbLot[]> {
     const query = String(params.query || '').trim();
@@ -527,177 +385,75 @@ export class ScraperDbClient {
     const minPrice = Number.isFinite(params.minPrice as number) ? Number(params.minPrice) : null;
     const maxPrice = Number.isFinite(params.maxPrice as number) ? Number(params.maxPrice) : null;
 
-    const anchor = buildAnchorTsQueries(query);
-
-    const sql = `
-      WITH strict_matches AS (
-        SELECT
-          l.lot_uid,
-          l.title,
-          l.description,
-          l.house_name,
-          l.auction_date,
-          l.price_realised,
-          l.currency,
-          l.currency_symbol,
-          l.estimate_min,
-          l.estimate_max,
-          l.lot_ref,
-          l.lot_number,
-          l.sale_type,
-          l.source_url,
-          true AS is_strict,
-          ts_rank_cd(
-            to_tsvector('simple', coalesce(l.title,'') || ' ' || coalesce(l.description,'')),
-            plainto_tsquery('simple', $1)
-          ) AS rank
-        FROM lots l
-        WHERE
-          to_tsvector('simple', coalesce(l.title,'') || ' ' || coalesce(l.description,'')) @@ plainto_tsquery('simple', $1)
-          AND l.price_realised IS NOT NULL
-          AND l.price_realised > 0
-          AND ($2::numeric IS NULL OR l.price_realised >= $2)
-          AND ($3::numeric IS NULL OR l.price_realised <= $3)
-        ORDER BY rank DESC, l.auction_date DESC NULLS LAST, l.lot_uid DESC
-        LIMIT $4
-      ),
-      anchor_matches AS (
-        SELECT
-          l.lot_uid,
-          l.title,
-          l.description,
-          l.house_name,
-          l.auction_date,
-          l.price_realised,
-          l.currency,
-          l.currency_symbol,
-          l.estimate_min,
-          l.estimate_max,
-          l.lot_ref,
-          l.lot_number,
-          l.sale_type,
-          l.source_url,
-          false AS is_strict,
-          (
-            ts_rank_cd(
-              to_tsvector('simple', coalesce(l.title,'') || ' ' || coalesce(l.description,'')),
-              CASE
-                WHEN $5::text IS NULL OR btrim($5) = '' THEN NULL
-                ELSE to_tsquery('simple', $5)
-              END
-            ) * 2.0
-            + (
-              CASE
-                WHEN $6::text IS NULL OR btrim($6) = '' THEN 0
-                ELSE ts_rank_cd(
-                  to_tsvector('simple', coalesce(l.title,'') || ' ' || coalesce(l.description,'')),
-                  to_tsquery('simple', $6)
-                ) * 0.15
-              END
-            )
-          ) AS rank
-        FROM lots l
-        WHERE
-          to_tsvector('simple', coalesce(l.title,'') || ' ' || coalesce(l.description,'')) @@ (
-            CASE
-              WHEN $5::text IS NULL OR btrim($5) = '' THEN NULL
-              ELSE to_tsquery('simple', $5)
-            END
-          )
-          AND l.price_realised IS NOT NULL
-          AND l.price_realised > 0
-          AND ($2::numeric IS NULL OR l.price_realised >= $2)
-          AND ($3::numeric IS NULL OR l.price_realised <= $3)
-          AND NOT EXISTS (SELECT 1 FROM strict_matches s WHERE s.lot_uid = l.lot_uid)
-        ORDER BY rank DESC, l.auction_date DESC NULLS LAST, l.lot_uid DESC
-        LIMIT GREATEST(0, $4 - (SELECT COUNT(*) FROM strict_matches))
-      ),
-      ranked AS (
-        SELECT * FROM strict_matches
-        UNION ALL
-        SELECT * FROM anchor_matches
-      )
-      SELECT
-        r.lot_uid,
-        r.title,
-        r.description,
-        r.house_name,
-        r.auction_date,
-        r.price_realised,
-        r.currency,
-        r.currency_symbol,
-        r.estimate_min,
-        r.estimate_max,
-        r.lot_ref,
-        r.lot_number,
-        r.sale_type,
-        r.source_url,
-        lead_img.image_filename AS image_filename,
-        lead_img.src_path AS image_src_path,
-        lead_img.gcs_path AS image_gcs_path
-      FROM ranked r
-      LEFT JOIN LATERAL (
-        SELECT i.image_filename, i.src_path, i.gcs_path
-        FROM images i
-        WHERE i.lot_uid = r.lot_uid
-        ORDER BY i.ordinal NULLS LAST, i.image_filename
-        LIMIT 1
-      ) AS lead_img ON TRUE
-      ORDER BY r.is_strict DESC, r.rank DESC, r.auction_date DESC NULLS LAST, r.lot_uid DESC
-    `;
-
-    const result = await this.pool.query(sql, [query, minPrice, maxPrice, limit, anchor.must, anchor.optionalOr]);
-    const rows = Array.isArray(result.rows) ? result.rows : [];
+    const controller = new AbortController();
+    const timeoutMs = Math.max(1_000, Number(process.env.AUCTION_DATA_API_TIMEOUT_MS || 10_000));
+    const timeout = setTimeout(() => controller.abort(new Error('auction_data_api_timeout')), timeoutMs);
+    let rows: any[];
+    try {
+      const response = await fetch(`${this.dataApiUrl}/api/v1/comparables/search`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-api-key': this.dataApiKey,
+        },
+        body: JSON.stringify({ query, minPrice, maxPrice, limit }),
+        signal: controller.signal,
+      });
+      const payload = await response.json() as { success?: boolean; lots?: any[]; error?: string };
+      if (!response.ok || payload.success !== true || !Array.isArray(payload.lots)) {
+        throw new Error(payload.error || `auction_data_api_${response.status}`);
+      }
+      rows = payload.lots;
+    } finally {
+      clearTimeout(timeout);
+    }
     const mediaRoot = normalizeMediaRoot(process.env.SCRAPER_DB_MEDIA_ROOT) || DEFAULT_MEDIA_ROOT;
     const categories = await getCategoryIndex(mediaRoot);
 
     return rows.map((row: any) => {
-      const auctionDate = row.auction_date ? new Date(row.auction_date).toISOString() : null;
+      const auctionDate = row.auctionDate ? new Date(row.auctionDate).toISOString() : null;
       const currency = row.currency || null;
-      const currencySymbol = row.currency_symbol || currencyToSymbol(currency);
-      const price = row.price_realised !== null && row.price_realised !== undefined
-        ? Number(row.price_realised)
+      const currencySymbol = row.currencySymbol || currencyToSymbol(currency);
+      const price = row.priceRealised !== null && row.priceRealised !== undefined
+        ? Number(row.priceRealised)
         : null;
-      const estimateMin = row.estimate_min !== null && row.estimate_min !== undefined ? Number(row.estimate_min) : null;
-      const estimateMax = row.estimate_max !== null && row.estimate_max !== undefined ? Number(row.estimate_max) : null;
+      const estimateMin = row.estimateMin !== null && row.estimateMin !== undefined ? Number(row.estimateMin) : null;
+      const estimateMax = row.estimateMax !== null && row.estimateMax !== undefined ? Number(row.estimateMax) : null;
 
-      const srcImagePath = (row.image_src_path || null) as string | null;
-      const gcsImagePath = (row.image_gcs_path || null) as string | null;
-      const rawImagePath = (srcImagePath || gcsImagePath || null) as string | null;
+      const rawImagePath = (row.imagePath || null) as string | null;
       const publishedImagePath = buildScraperDbPublishedImagePath({
         srcPath: rawImagePath,
-        imageFileName: row.image_filename || null,
-        lotNumber: row.lot_number || null,
+        imageFileName: row.imageFileName || null,
+        lotNumber: row.lotNumber || null,
         mediaRoot,
         categories,
       });
       const imagePath = publishedImagePath
-        || (isPublishedAssetPath(srcImagePath) ? srcImagePath : null)
-        || (isPublishedAssetPath(gcsImagePath) ? gcsImagePath : null)
+        || (isPublishedAssetPath(rawImagePath) ? rawImagePath : null)
         || rawImagePath;
       const sourceUrl = deriveInvaluableLotUrl({
-        sourceUrl: row.source_url || null,
+        sourceUrl: row.sourceUrl || null,
         title: row.title || null,
-        lotRef: row.lot_ref || null,
-        lotNumber: row.lot_number || null,
+        lotRef: row.lotRef || null,
+        lotNumber: row.lotNumber || null,
       });
       const lot: ScraperDbLot = {
-        lotUid: String(row.lot_uid),
-        lotRef: row.lot_ref || null,
+        lotUid: String(row.lotUid),
+        lotRef: row.lotRef || null,
         title: row.title || null,
         description: row.description || null,
-        houseName: row.house_name || null,
+        houseName: row.houseName || null,
         auctionDate,
         priceRealised: price,
         currency,
         currencySymbol,
         estimateMin,
         estimateMax,
-        lotNumber: row.lot_number || null,
-        saleType: row.sale_type || null,
+        lotNumber: row.lotNumber || null,
+        saleType: row.saleType || null,
         sourceUrl,
         imagePath,
-        imageFileName: row.image_filename || null,
+        imageFileName: row.imageFileName || null,
       };
       toCanonicalComparableLot(lot);
       return lot;

@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 async function loadCurrencySummary() {
-  process.env.SCRAPER_DB_URL ||= 'postgres://user:pass@127.0.0.1:5432/valuer_test';
+  process.env.AUCTION_DATA_API_KEY ||= 'test-data-api-key';
+  process.env.AUCTION_DATA_API_URL ||= 'http://127.0.0.1:9';
   const module = await import('../server.js');
   return module.summarizeComparableCurrencies;
 }

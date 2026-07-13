@@ -37,7 +37,7 @@ const container = argValue('--container') || process.env.VALUER_BRIDGE_CONTAINER
 const names = hasFlag('--self-env') ? envNamesFromProcess() : envNamesFromContainer(container);
 const nameSet = new Set(names);
 
-const required = ['SCRAPER_DB_URL'];
+const required = ['AUCTION_DATA_API_URL', 'AUCTION_DATA_API_KEY'];
 const forbidden = [
   'OPENAI_API_KEY',
   'VALUER_AGENT_URL',

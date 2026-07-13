@@ -39,7 +39,7 @@ const blockPatterns = [
   /ReferenceError/i,
   /TypeError/i,
   /UnhandledPromiseRejection/i,
-  /Missing SCRAPER_DB_URL/i,
+  /Missing AUCTION_DATA_API_KEY/i,
   /scraper_db_error/i,
   /database .*?(error|failed|connection)/i,
   /ECONNREFUSED/i,

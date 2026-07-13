@@ -49,7 +49,7 @@ export class ValuerService {
     const publishUrl = String(
       process.env.SCRAPER_ORCHESTRATOR_THUMBS_PUBLISH_URL ||
       process.env.SCRAPPER_THUMBS_PUBLISH_URL ||
-      'http://scraper-orchestrator:8080/api/lot-thumbs/publish'
+      'http://scraper-ops-api:8080/api/lot-thumbs/publish'
     ).trim();
     const apiKey = String(process.env.INGEST_API_KEY || process.env.SCRAPPER_INTERNAL_API_KEY || '').trim();
     if (!publishUrl || !apiKey) return new Map();
