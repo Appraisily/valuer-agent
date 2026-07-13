@@ -19,6 +19,28 @@ export type ScraperDbSearchOptions = {
   timeoutMs?: number;
 };
 
+export type AuctionDataApiReadiness = {
+  ready: boolean;
+  status: number | null;
+  error: string | null;
+  latencyMs: number;
+};
+
+type AuctionDataApiClientOptions = {
+  dataApiUrl?: string;
+  dataApiKey?: string;
+  assetsBaseUrl?: string;
+  fetchImpl?: typeof fetch;
+};
+
+export function resolveAuctionDataApiConfig(
+  env: Record<string, string | undefined> = process.env,
+): { url: string; key: string; configured: boolean } {
+  const url = normalizeBaseUrl(env.AUCTION_DATA_API_URL, 'http://scraper-orchestrator:8080');
+  const key = String(env.AUCTION_DATA_API_KEY || env.INGEST_API_KEY || '').trim();
+  return { url, key, configured: Boolean(url && key) };
+}
+
 export class AuctionDataApiError extends Error {
   code: string;
   status: number | null;
@@ -254,22 +276,61 @@ export class ScraperDbClient {
   private dataApiUrl: string;
   private dataApiKey: string;
   private assetsBaseUrl: string;
+  private fetchImpl: typeof fetch;
 
-  constructor() {
-    this.dataApiUrl = normalizeBaseUrl(
-      process.env.AUCTION_DATA_API_URL,
-      'http://scraper-orchestrator:8080',
-    );
-    this.dataApiKey = String(process.env.AUCTION_DATA_API_KEY || process.env.INGEST_API_KEY || '').trim();
+  constructor(options: AuctionDataApiClientOptions = {}) {
+    const config = resolveAuctionDataApiConfig({
+      ...process.env,
+      ...(options.dataApiUrl === undefined ? {} : { AUCTION_DATA_API_URL: options.dataApiUrl }),
+      ...(options.dataApiKey === undefined ? {} : { AUCTION_DATA_API_KEY: options.dataApiKey, INGEST_API_KEY: '' }),
+    });
+    this.dataApiUrl = config.url;
+    this.dataApiKey = config.key;
     if (!this.dataApiKey) throw new Error('Missing AUCTION_DATA_API_KEY');
 
     this.assetsBaseUrl = normalizeBaseUrl(
-      process.env.PUBLIC_ASSETS_BASE_URL || process.env.LOCAL_STORAGE_BASE_URL_PUBLIC || process.env.LOCAL_STORAGE_BASE_URL,
+      options.assetsBaseUrl || process.env.PUBLIC_ASSETS_BASE_URL || process.env.LOCAL_STORAGE_BASE_URL_PUBLIC || process.env.LOCAL_STORAGE_BASE_URL,
       'https://assets.appraisily.com',
     );
+    this.fetchImpl = options.fetchImpl || fetch;
   }
 
   async close(): Promise<void> {}
+
+  async checkReadiness(timeoutMs = 2_000): Promise<AuctionDataApiReadiness> {
+    const startedAt = Date.now();
+    const boundedTimeoutMs = Math.max(100, Math.min(5_000, Number(timeoutMs) || 2_000));
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(new Error('auction_data_api_readiness_timeout')), boundedTimeoutMs);
+
+    try {
+      const response = await this.fetchImpl(`${this.dataApiUrl}/api/v1/health`, {
+        headers: {
+          accept: 'application/json',
+          'x-api-key': this.dataApiKey,
+        },
+        signal: controller.signal,
+      });
+      const payload = await response.json().catch(() => null) as { success?: boolean } | null;
+      const ready = response.ok && payload?.success === true;
+      return {
+        ready,
+        status: response.status,
+        error: ready ? null : `auction_data_api_${response.status}`,
+        latencyMs: Date.now() - startedAt,
+      };
+    } catch (error: any) {
+      const timedOut = controller.signal.aborted || error?.name === 'AbortError';
+      return {
+        ready: false,
+        status: null,
+        error: timedOut ? 'auction_data_api_readiness_timeout' : 'auction_data_api_unreachable',
+        latencyMs: Date.now() - startedAt,
+      };
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
 
   async searchLots(params: ScraperDbSearchParams, options: ScraperDbSearchOptions = {}): Promise<ScraperDbLot[]> {
     const startedAt = Date.now();
@@ -287,7 +348,7 @@ export class ScraperDbClient {
     const timeout = setTimeout(() => controller.abort(new Error('auction_data_api_timeout')), timeoutMs);
     let rows: any[];
     try {
-      const response = await fetch(`${this.dataApiUrl}/api/v1/comparables/search`, {
+      const response = await this.fetchImpl(`${this.dataApiUrl}/api/v1/comparables/search`, {
         method: 'POST',
         headers: {
           'content-type': 'application/json',

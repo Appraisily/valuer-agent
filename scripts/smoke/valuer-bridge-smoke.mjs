@@ -67,13 +67,13 @@ async function request(path, options = {}) {
   }
 }
 
-async function waitForHealth() {
+async function waitForHealth(path = '/ready') {
   const healthTimeoutMs = Math.min(timeoutMs, 5_000);
   let lastError = null;
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
-      const health = await request('/health', { timeoutMs: healthTimeoutMs });
+      const health = await request(path, { timeoutMs: healthTimeoutMs });
       if (health.ok) return health;
       lastError = health;
     } catch (err) {
@@ -88,9 +88,9 @@ async function waitForHealth() {
   }
 
   if (lastError instanceof Error) {
-    fail('/health should return 2xx', lastError.message);
+    fail(`${path} should return 2xx`, lastError.message);
   }
-  fail('/health should return 2xx', lastError);
+  fail(`${path} should return 2xx`, lastError);
 }
 
 function bodyContainsForbiddenProvider(json) {
@@ -128,13 +128,28 @@ const batchPayload = {
 
 console.log(`[smoke] baseUrl=${baseUrl}`);
 
-const health = await waitForHealth();
+const live = await request('/live', { timeoutMs: Math.min(timeoutMs, 5_000) });
+assert(live.ok, '/live should return 2xx', live);
+assert(live.json?.status === 'ok', '/live should report status ok', live.json);
+assert(live.json?.service === 'valuer-bridge', '/live should identify valuer-bridge', live.json);
+console.log('[smoke] live ok');
+
+const health = await request('/health', { timeoutMs: Math.min(timeoutMs, 5_000) });
 assert(health.ok, '/health should return 2xx', health);
 assert(health.json?.status === 'ok', '/health should report status ok', health.json);
 assert(health.json?.service === 'valuer-bridge', '/health should identify valuer-bridge', health.json);
 assert(health.json?.provider === 'auction_data_api', '/health should report auction_data_api provider', health.json);
 assert(health.json?.apiConfigured === true, '/health should report apiConfigured=true', health.json);
+assert(health.json?.readinessEndpoint === '/ready', '/health should point to /ready', health.json);
 console.log('[smoke] health ok');
+
+const ready = await waitForHealth('/ready');
+assert(ready.json?.status === 'ok', '/ready should report status ok', ready.json);
+assert(ready.json?.service === 'valuer-bridge', '/ready should identify valuer-bridge', ready.json);
+assert(ready.json?.provider === 'auction_data_api', '/ready should report auction_data_api provider', ready.json);
+assert(ready.json?.apiConfigured === true, '/ready should report apiConfigured=true', ready.json);
+assert(ready.json?.upstream?.ready === true, '/ready should confirm upstream readiness', ready.json);
+console.log('[smoke] readiness ok');
 
 const batch = await request('/v2/search/batch', {
   method: 'POST',

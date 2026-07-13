@@ -45,6 +45,7 @@ const archivePrefix = process.env.VALUER_ARCHIVE_PREFIX ?? 'valuer-bridge/respon
 const eventRoutingKey = process.env.MESSAGE_ROUTING_KEY ?? 'valuer.http.completed';
 const maxBatchTerms = intFromEnv('VALUER_BATCH_MAX_TERMS', 25);
 const maxTermLength = intFromEnv('VALUER_BATCH_MAX_TERM_LENGTH', 160);
+const readinessTimeoutMs = intFromEnv('VALUER_READINESS_TIMEOUT_MS', 2_000, 100);
 
 const valuer = new ValuerService();
 const app = express();
@@ -432,12 +433,33 @@ function installRequestLogging() {
   });
 }
 
+app.get('/live', (_req: Request, res: Response) => {
+  res.status(200).json({
+    status: 'ok',
+    service: 'valuer-bridge',
+    auctionContracts: CONTRACT_VERSIONS,
+  });
+});
+
 app.get('/health', (_req: Request, res: Response) => {
   res.status(200).json({
     status: 'ok',
     service: 'valuer-bridge',
     auctionContracts: CONTRACT_VERSIONS,
     ...valuer.getReadiness(),
+    readinessEndpoint: '/ready',
+  });
+});
+
+app.get('/ready', async (_req: Request, res: Response) => {
+  const upstream = await valuer.checkReadiness(readinessTimeoutMs);
+  const ready = upstream.ready && valuer.getReadiness().apiConfigured;
+  res.status(ready ? 200 : 503).json({
+    status: ready ? 'ok' : 'not_ready',
+    service: 'valuer-bridge',
+    auctionContracts: CONTRACT_VERSIONS,
+    ...valuer.getReadiness(),
+    upstream,
   });
 });
 

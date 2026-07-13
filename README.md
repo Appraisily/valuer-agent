@@ -6,16 +6,25 @@ It is intentionally not an agent. It does not generate search terms, call OpenAI
 
 ## Runtime Contract
 
+### `GET /live`
+
+Returns process liveness without depending on Auction Data API availability.
+
+### `GET /ready`
+
+Returns HTTP 200 only when the authenticated Auction Data API health check succeeds. It returns HTTP 503 with a bounded upstream diagnostic when the dependency is unavailable.
+
 ### `GET /health`
 
-Returns service readiness and the active provider.
+Compatibility health surface. It reports the configured provider and points callers to `/ready`; use `/live` for liveness and `/ready` for dependency readiness.
 
 ```json
 {
   "status": "ok",
   "service": "valuer-bridge",
   "provider": "auction_data_api",
-  "apiConfigured": true
+  "apiConfigured": true,
+  "readinessEndpoint": "/ready"
 }
 ```
 
@@ -93,6 +102,7 @@ Optional:
 - `PORT`
 - `CORS_ALLOWED_ORIGINS`
 - `AUCTION_DATA_API_TIMEOUT_MS`
+- `VALUER_READINESS_TIMEOUT_MS`
 - `AUCTION_DATA_API_CIRCUIT_FAILURES`
 - `AUCTION_DATA_API_CIRCUIT_COOLDOWN_MS`
 - `SCRAPER_DB_CONCURRENCY` (compatibility name for Valuer worker concurrency)
@@ -124,7 +134,7 @@ Deploy smoke:
 npm run smoke:deploy -- --base https://valuer-bridge.appraisily.com --container valuer-bridge
 ```
 
-The deploy smoke is wired into the VPS deploy helper. Candidate deploys run the HTTP contract against the temporary container before promotion. Live deploys additionally assert the container runtime env has `SCRAPER_DB_URL`, does not have legacy/AI/fallback env names, and has no recent blocking log errors.
+The deploy smoke is wired into the VPS deploy helper. Candidate deploys run the HTTP contract against the temporary container before promotion. Live deploys additionally assert the container runtime env has `AUCTION_DATA_API_URL` and `AUCTION_DATA_API_KEY`, does not have legacy AI/fallback provider env names, and has no recent blocking log errors.
 
 For runtime env schema validation:
 

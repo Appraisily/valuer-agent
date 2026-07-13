@@ -24,7 +24,7 @@ type BatchSearchBody = {
   skipThumbPublish?: boolean;
 };
 
-type ScraperDbReader = Pick<ScraperDbClient, 'searchLots' | 'close'>;
+type ScraperDbReader = Pick<ScraperDbClient, 'searchLots' | 'close'> & Partial<Pick<ScraperDbClient, 'checkReadiness'>>;
 type ThumbPublishResult = Map<string, { thumbUrl: string | null; srcPath: string | null }>;
 
 export class ValuerService {
@@ -40,6 +40,18 @@ export class ValuerService {
 
   getReadiness(): { provider: 'auction_data_api'; apiConfigured: boolean } {
     return { provider: 'auction_data_api', apiConfigured: true };
+  }
+
+  async checkReadiness(timeoutMs?: number) {
+    if (!this.scraperDb.checkReadiness) {
+      return {
+        ready: false,
+        status: null,
+        error: 'auction_data_api_readiness_not_supported',
+        latencyMs: 0,
+      };
+    }
+    return this.scraperDb.checkReadiness(timeoutMs);
   }
 
   async close(): Promise<void> {
