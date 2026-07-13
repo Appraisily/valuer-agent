@@ -4,6 +4,7 @@ const CONTRACT_VERSIONS = Object.freeze({
   pageArtifact: 1, validEmptyArtifact: 1, scrapeJobRequest: 1, scrapeJobStatus: 1,
   scrapeJobResult: 1, pageAudit: 1, noveltyDecision: 1, ingestCommand: 1,
   ingestResult: 1, thumbnailPublishRequest: 1, thumbnailPublishResult: 1, comparableLot: 1,
+  auctionSearchRequest: 1, auctionSearchResponse: 1,
 });
 const INGEST_COMMAND_TERMINAL_STATUSES = Object.freeze(['success', 'partial', 'permanent_failure', 'rejected_invalid_artifact']);
 const INGEST_COMMAND_STATUSES = Object.freeze(['pending', 'running', 'retryable_failure', ...INGEST_COMMAND_TERMINAL_STATUSES]);
@@ -31,16 +32,27 @@ function string(value, contract, field, { max = 1000, nullable = false } = {}) {
   if (normalized.length > max) throw new AuctionContractError(contract, `${field} exceeds ${max} characters`);
   return normalized;
 }
-function number(value, contract, field, { integer = false, min = -Infinity, nullable = false } = {}) {
+function number(value, contract, field, { integer = false, min = -Infinity, max = Infinity, nullable = false } = {}) {
   if (nullable && (value === null || value === undefined)) return null;
   const normalized = Number(value);
-  if (!Number.isFinite(normalized) || (integer && !Number.isInteger(normalized)) || normalized < min) throw new AuctionContractError(contract, `${field} is invalid`);
+  if (!Number.isFinite(normalized) || (integer && !Number.isInteger(normalized)) || normalized < min || normalized > max) throw new AuctionContractError(contract, `${field} is invalid`);
   return normalized;
 }
 function enumeration(value, allowed, contract, field) {
   const normalized = string(value, contract, field);
   if (!allowed.includes(normalized)) throw new AuctionContractError(contract, `${field} has unsupported value ${normalized}`);
   return normalized;
+}
+function stringArray(value, contract, field, { maxItems = 20, maxLength = 200 } = {}) {
+  if (!Array.isArray(value) || value.length > maxItems) throw new AuctionContractError(contract, `${field} must contain at most ${maxItems} values`);
+  value.forEach((item, index) => string(item, contract, `${field}[${index}]`, { max: maxLength }));
+  return value;
+}
+function onlyFields(value, allowed, contract, field = 'payload') {
+  const accepted = new Set(allowed);
+  for (const key of Object.keys(value)) {
+    if (!accepted.has(key)) throw new AuctionContractError(contract, `${field}.${key} is unsupported`);
+  }
 }
 function isoTimestamp(value, contract, field) {
   const normalized = string(value, contract, field, { max: 64 });
@@ -139,13 +151,75 @@ function validateThumbnailPublishResult(input) {
   ['requested', 'processed', 'publishedCount', 'skippedCount', 'failedCount'].forEach((field) => number(input[field], contract, field, { integer: true, min: 0 })); return input;
 }
 function validateComparableLot(input) {
-  const contract = 'comparableLot'; object(input, contract); version(input, contract); string(input.lotUid, contract, 'lotUid', { max: 255 });
-  if (input.title != null) string(input.title, contract, 'title', { max: 2000 }); if (input.priceRealised != null) number(input.priceRealised, contract, 'priceRealised', { min: 0 });
-  if (input.currency != null) string(input.currency, contract, 'currency', { max: 16 }); if (input.auctionDate != null) isoTimestamp(input.auctionDate, contract, 'auctionDate'); return input;
+  const contract = 'comparableLot'; object(input, contract);
+  onlyFields(input, ['schemaVersion', 'lotUid', 'lotRef', 'title', 'description', 'houseName', 'saleType', 'auctionDate', 'priceRealised', 'currency', 'estimateMin', 'estimateMax', 'lotNumber', 'sourceUrl', 'rankingScore', 'assetStatus', 'assetVerifiedAt', 'imageUrl'], contract);
+  if (!Object.prototype.hasOwnProperty.call(input, 'title')) throw new AuctionContractError(contract, 'title is required (nullable)');
+  if (!Object.prototype.hasOwnProperty.call(input, 'assetStatus')) throw new AuctionContractError(contract, 'assetStatus is required');
+  version(input, contract); string(input.lotUid, contract, 'lotUid', { max: 255 });
+  if (input.lotRef != null) string(input.lotRef, contract, 'lotRef', { max: 255 });
+  if (input.title != null) string(input.title, contract, 'title', { max: 2000 });
+  if (input.description != null) string(input.description, contract, 'description', { max: 20000 });
+  if (input.houseName != null) string(input.houseName, contract, 'houseName', { max: 500 });
+  if (input.saleType != null) string(input.saleType, contract, 'saleType', { max: 100 });
+  if (input.priceRealised != null) number(input.priceRealised, contract, 'priceRealised', { min: 0 });
+  if (input.currency != null && !/^[A-Z]{3}$/.test(string(input.currency, contract, 'currency', { max: 3 }))) throw new AuctionContractError(contract, 'currency must be an ISO 4217 code');
+  if (input.auctionDate != null) isoTimestamp(input.auctionDate, contract, 'auctionDate');
+  if (input.estimateMin != null) number(input.estimateMin, contract, 'estimateMin', { min: 0 });
+  if (input.estimateMax != null) number(input.estimateMax, contract, 'estimateMax', { min: 0 });
+  if (input.estimateMin != null && input.estimateMax != null && Number(input.estimateMin) > Number(input.estimateMax)) throw new AuctionContractError(contract, 'estimateMin must not exceed estimateMax');
+  if (input.lotNumber != null) string(input.lotNumber, contract, 'lotNumber', { max: 255 });
+  if (input.sourceUrl != null) string(input.sourceUrl, contract, 'sourceUrl', { max: 2048 });
+  if (input.rankingScore != null) number(input.rankingScore, contract, 'rankingScore', { min: 0 });
+  const assetStatus = enumeration(input.assetStatus, ['available', 'unavailable', 'unknown'], contract, 'assetStatus');
+  if (input.assetVerifiedAt != null) isoTimestamp(input.assetVerifiedAt, contract, 'assetVerifiedAt');
+  if (input.imageUrl != null) string(input.imageUrl, contract, 'imageUrl', { max: 2048 });
+  if (assetStatus === 'available' && (!input.assetVerifiedAt || !input.imageUrl)) throw new AuctionContractError(contract, 'available asset requires assetVerifiedAt and imageUrl');
+  if (assetStatus !== 'available' && input.imageUrl != null) throw new AuctionContractError(contract, 'non-available asset must not expose imageUrl');
+  return input;
 }
-const validators = Object.freeze({ pageArtifact: validatePageArtifact, validEmptyArtifact: validateValidEmptyArtifact, scrapeJobRequest: validateScrapeJobRequest, scrapeJobStatus: validateScrapeJobStatus, scrapeJobResult: validateScrapeJobResult, pageAudit: validatePageAudit, noveltyDecision: validateNoveltyDecision, ingestCommand: validateIngestCommand, ingestResult: validateIngestResult, thumbnailPublishRequest: validateThumbnailPublishRequest, thumbnailPublishResult: validateThumbnailPublishResult, comparableLot: validateComparableLot });
+function validateAuctionSearchRequest(input) {
+  const contract = 'auctionSearchRequest'; object(input, contract);
+  onlyFields(input, ['schemaVersion', 'query', 'sort', 'limit', 'cursor', 'filters'], contract);
+  version(input, contract);
+  string(input.query, contract, 'query', { max: 500 });
+  if (input.sort != null) enumeration(input.sort, ['relevance', 'date_desc', 'price_desc', 'price_asc'], contract, 'sort');
+  if (input.limit != null) number(input.limit, contract, 'limit', { integer: true, min: 1, max: 200 });
+  if (input.cursor != null) string(input.cursor, contract, 'cursor', { max: 2048 });
+  if (input.filters != null) {
+    const filters = object(input.filters, contract, 'filters');
+    onlyFields(filters, ['minPrice', 'maxPrice', 'dateFrom', 'dateTo', 'categories', 'auctionHouses', 'keywords', 'artist', 'requireImages', 'requirePublicImages'], contract, 'filters');
+    const minPrice = filters.minPrice == null ? null : number(filters.minPrice, contract, 'filters.minPrice', { min: 0 });
+    const maxPrice = filters.maxPrice == null ? null : number(filters.maxPrice, contract, 'filters.maxPrice', { min: 0 });
+    if (minPrice != null && maxPrice != null && minPrice > maxPrice) throw new AuctionContractError(contract, 'filters.minPrice must not exceed filters.maxPrice');
+    const dateFrom = filters.dateFrom == null ? null : isoTimestamp(filters.dateFrom, contract, 'filters.dateFrom');
+    const dateTo = filters.dateTo == null ? null : isoTimestamp(filters.dateTo, contract, 'filters.dateTo');
+    if (dateFrom && dateTo && Date.parse(dateFrom) > Date.parse(dateTo)) throw new AuctionContractError(contract, 'filters.dateFrom must not exceed filters.dateTo');
+    for (const field of ['categories', 'auctionHouses', 'keywords']) {
+      if (filters[field] != null) stringArray(filters[field], contract, `filters.${field}`);
+    }
+    if (filters.artist != null) string(filters.artist, contract, 'filters.artist', { max: 200 });
+    for (const field of ['requireImages', 'requirePublicImages']) {
+      if (filters[field] != null && typeof filters[field] !== 'boolean') throw new AuctionContractError(contract, `filters.${field} must be boolean`);
+    }
+  }
+  return input;
+}
+function validateAuctionSearchResponse(input) {
+  const contract = 'auctionSearchResponse'; object(input, contract);
+  onlyFields(input, ['schemaVersion', 'success', 'query', 'sort', 'ranking', 'lots', 'nextCursor', 'source'], contract);
+  version(input, contract);
+  if (input.success !== true) throw new AuctionContractError(contract, 'success must be true');
+  string(input.query, contract, 'query', { max: 500 });
+  enumeration(input.sort, ['relevance', 'date_desc', 'price_desc', 'price_asc'], contract, 'sort');
+  string(input.ranking, contract, 'ranking', { max: 100 });
+  if (!Array.isArray(input.lots) || input.lots.length > 200) throw new AuctionContractError(contract, 'lots must contain at most 200 values');
+  input.lots.forEach(validateComparableLot);
+  if (input.nextCursor != null) string(input.nextCursor, contract, 'nextCursor', { max: 2048 });
+  if (input.source != null) string(input.source, contract, 'source', { max: 100 });
+  return input;
+}
+const validators = Object.freeze({ pageArtifact: validatePageArtifact, validEmptyArtifact: validateValidEmptyArtifact, scrapeJobRequest: validateScrapeJobRequest, scrapeJobStatus: validateScrapeJobStatus, scrapeJobResult: validateScrapeJobResult, pageAudit: validatePageAudit, noveltyDecision: validateNoveltyDecision, ingestCommand: validateIngestCommand, ingestResult: validateIngestResult, thumbnailPublishRequest: validateThumbnailPublishRequest, thumbnailPublishResult: validateThumbnailPublishResult, comparableLot: validateComparableLot, auctionSearchRequest: validateAuctionSearchRequest, auctionSearchResponse: validateAuctionSearchResponse });
 function validateContract(contract, input) { const validator = validators[contract]; if (!validator) throw new AuctionContractError(contract, 'unknown contract'); return validator(input); }
 function isTerminalIngestCommandStatus(status) { return INGEST_COMMAND_TERMINAL_STATUSES.includes(String(status || '')); }
 
-module.exports = { AuctionContractError, CONTRACT_VERSIONS, INGEST_COMMAND_STATUSES, INGEST_COMMAND_TERMINAL_STATUSES, SCRAPE_JOB_STATUSES, isTerminalIngestCommandStatus, validateComparableLot, validateContract, validateIngestCommand, validateIngestResult, validateNoveltyDecision, validatePageArtifact, validatePageAudit, validateScrapeJobRequest, validateScrapeJobResult, validateScrapeJobStatus, validateThumbnailPublishRequest, validateThumbnailPublishResult, validateValidEmptyArtifact };
-
+module.exports = { AuctionContractError, CONTRACT_VERSIONS, INGEST_COMMAND_STATUSES, INGEST_COMMAND_TERMINAL_STATUSES, SCRAPE_JOB_STATUSES, isTerminalIngestCommandStatus, validateAuctionSearchRequest, validateAuctionSearchResponse, validateComparableLot, validateContract, validateIngestCommand, validateIngestResult, validateNoveltyDecision, validatePageArtifact, validatePageAudit, validateScrapeJobRequest, validateScrapeJobResult, validateScrapeJobStatus, validateThumbnailPublishRequest, validateThumbnailPublishResult, validateValidEmptyArtifact };

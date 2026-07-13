@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://appraisily.com/schemas/auction-search-request-v1.json",
+  "title": "Canonical auction search request v1",
+  "type": "object",
+  "required": ["schemaVersion", "query"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "query": { "type": "string", "minLength": 1, "maxLength": 500 },
+    "sort": { "enum": ["relevance", "date_desc", "price_desc", "price_asc"] },
+    "limit": { "type": "integer", "minimum": 1, "maximum": 200 },
+    "cursor": { "type": ["string", "null"], "maxLength": 2048 },
+    "filters": {
+      "type": "object",
+      "properties": {
+        "minPrice": { "type": ["number", "null"], "minimum": 0 },
+        "maxPrice": { "type": ["number", "null"], "minimum": 0 },
+        "dateFrom": { "type": ["string", "null"], "format": "date-time" },
+        "dateTo": { "type": ["string", "null"], "format": "date-time" },
+        "categories": { "type": "array", "maxItems": 20, "items": { "type": "string", "minLength": 1, "maxLength": 200 } },
+        "auctionHouses": { "type": "array", "maxItems": 20, "items": { "type": "string", "minLength": 1, "maxLength": 200 } },
+        "keywords": { "type": "array", "maxItems": 20, "items": { "type": "string", "minLength": 1, "maxLength": 200 } },
+        "artist": { "type": ["string", "null"], "maxLength": 200 },
+        "requireImages": { "type": "boolean" },
+        "requirePublicImages": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

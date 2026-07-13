@@ -30,21 +30,32 @@ describe('auction comparable contract compatibility', () => {
       lotNumber: null,
       saleType: null,
       sourceUrl: fixture.sourceUrl,
+      rankingScore: fixture.rankingScore,
       imagePath: null,
       imageFileName: null,
+      imageUrl: fixture.imageUrl,
+      assetStatus: fixture.assetStatus,
+      assetVerifiedAt: fixture.assetVerifiedAt,
     };
     expect(toCanonicalComparableLot(lot)).toEqual({
       schemaVersion: 1,
       lotUid: fixture.lotUid,
+      lotRef: null,
       title: fixture.title,
       description: fixture.description,
       houseName: fixture.houseName,
+      saleType: null,
       auctionDate: fixture.auctionDate,
       priceRealised: fixture.priceRealised,
       currency: fixture.currency,
       estimateMin: fixture.estimateMin,
       estimateMax: fixture.estimateMax,
+      lotNumber: null,
       sourceUrl: fixture.sourceUrl,
+      rankingScore: fixture.rankingScore,
+      assetStatus: fixture.assetStatus,
+      assetVerifiedAt: fixture.assetVerifiedAt,
+      imageUrl: fixture.imageUrl,
     });
   });
 });

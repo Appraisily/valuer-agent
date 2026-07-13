@@ -1,8 +1,8 @@
 # Valuer Bridge
 
-Valuer Bridge is the DB-backed comparable-auction search service for Appraisily.
+Valuer Bridge is the bounded comparable-auction search service for Appraisily.
 
-It is intentionally not an agent. It does not generate search terms, call OpenAI, scrape live sites, or fall back to alternate providers at runtime. Callers must send explicit search terms, and the service queries the scraper Postgres database through `ScraperDbClient`.
+It is intentionally not an agent. It does not generate search terms, call OpenAI, scrape live sites, or fall back to alternate providers at runtime. Callers send explicit search terms. Valuer Bridge calls the authenticated Auction Data API owned by Scraper Orchestrator; it does not connect to scraper PostgreSQL directly.
 
 ## Runtime Contract
 
@@ -14,8 +14,8 @@ Returns service readiness and the active provider.
 {
   "status": "ok",
   "service": "valuer-bridge",
-  "provider": "scraper_db",
-  "dbConfigured": true
+  "provider": "auction_data_api",
+  "apiConfigured": true
 }
 ```
 
@@ -61,7 +61,13 @@ Important behavior:
 - `pricing.min` defaults to `VALUER_MIN_PRICE_DEFAULT` or `250`.
 - `limits.perTerm` is capped at `200`.
 - `options.concurrency` is capped at `10`.
-- The provider is always `scraper_db`.
+- The provider is always `auction_data_api`.
+- `limits.timeoutMs` is one absolute batch deadline, capped at 120 seconds. Every attempt receives only the remaining budget.
+- `limits.retries` is capped at three retries; validation errors and successful empty searches are never retried.
+- Partial batches return `diagnostics.partial=true` and per-term failure codes, so callers can distinguish an upstream timeout from a true zero-result search.
+- A transport circuit breaker stops repeated attempts while the Auction Data API is unhealthy.
+- `data.lots` and every `data.byQuery[].result.data.lots[]` entry use the canonical auction lot fields: `schemaVersion`, `lotUid`, `lotRef`, `title`, `description`, `houseName`, `saleType`, `auctionDate`, `priceRealised`, `currency`, `estimateMin`, `estimateMax`, `lotNumber`, `sourceUrl`, `rankingScore`, `assetStatus`, `assetVerifiedAt`, and `imageUrl`.
+- `imageUrl` is non-null only when the upstream contract says `assetStatus=available` and includes a verification timestamp.
 
 ## Removed Endpoints
 
@@ -79,17 +85,17 @@ The old valuation and compatibility routes now return `410 endpoint_removed` wit
 
 Required:
 
-- `SCRAPER_DB_URL`
+- `AUCTION_DATA_API_URL`
+- `AUCTION_DATA_API_KEY`
 
 Optional:
 
 - `PORT`
 - `CORS_ALLOWED_ORIGINS`
-- `SCRAPER_DATABASE_URL` / `SCRAPER_DB_CONNECTION_STRING` as scraper DB connection-string aliases
-- `SCRAPER_DB_SSL`
-- `SCRAPER_DB_POOL_SIZE`
-- `SCRAPER_DB_QUERY_TIMEOUT_MS`
-- `SCRAPER_DB_CONCURRENCY`
+- `AUCTION_DATA_API_TIMEOUT_MS`
+- `AUCTION_DATA_API_CIRCUIT_FAILURES`
+- `AUCTION_DATA_API_CIRCUIT_COOLDOWN_MS`
+- `SCRAPER_DB_CONCURRENCY` (compatibility name for Valuer worker concurrency)
 - `VALUER_BATCH_CONCURRENCY`
 - `VALUER_BATCH_HTTP_TIMEOUT_MS`
 - `VALUER_MIN_PRICE_DEFAULT`

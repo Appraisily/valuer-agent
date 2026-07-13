@@ -21,8 +21,12 @@ function baseLot(overrides: Partial<ScraperDbLot> = {}): ScraperDbLot {
     lotNumber: '1',
     saleType: null,
     sourceUrl: 'https://example.test/lot/1',
+    rankingScore: 4.5,
     imagePath: null,
     imageFileName: 'lot.jpg',
+    imageUrl: null,
+    assetStatus: 'unknown',
+    assetVerifiedAt: null,
     ...overrides,
   };
 }
@@ -69,10 +73,9 @@ describe('ValuerService image contract', () => {
       const result = await service.batchSearch({ searches: [{ query: 'test lot', limit: 1 }] });
       const lot = result.searches[0].result.data.lots[0];
 
-      expect(lot.thumbUrl).toBe(`https://assets.example.test/${relativePath}`);
       expect(lot.imageUrl).toBe(`https://assets.example.test/${relativePath}`);
-      expect(lot.image).toBe(`https://assets.example.test/${relativePath}`);
-      expect(lot.imagePath).toBe(relativePath);
+      expect(lot.assetStatus).toBe('available');
+      expect(lot.assetVerifiedAt).toBeTruthy();
     });
   });
 
@@ -93,15 +96,12 @@ describe('ValuerService image contract', () => {
       const result = await service.batchSearch({ searches: [{ query: 'test lot', limit: 1 }] });
       const lot = result.searches[0].result.data.lots[0];
 
-      expect(lot.thumbUrl).toBeNull();
-      expect(lot.thumbnail).toBeNull();
       expect(lot.imageUrl).toBeNull();
-      expect(lot.image).toBeNull();
-      expect(lot.originalUrl).toBeNull();
+      expect(lot.assetStatus).toBe('unknown');
     });
   });
 
-  it('emits source URL compatibility fields for scraper DB lots', async () => {
+  it('emits the canonical source URL field for scraper DB lots', async () => {
     await withPublicAssetsRoot(async () => {
       const service = new ValuerService({
         scraperDb: {
@@ -122,13 +122,8 @@ describe('ValuerService image contract', () => {
       const result = await service.batchSearch({ searches: [{ query: 'german school oil painting', limit: 1 }] });
       const lot = result.searches[0].result.data.lots[0];
 
-      expect(lot.url).toBe('https://www.invaluable.com/auction-lot-19th-century-german-school-oil-painting-359-c-abc123def0');
-      expect(lot.lotUrl).toBe(lot.url);
-      expect(lot.lot_url).toBe(lot.url);
-      expect(lot.sourceUrl).toBe(lot.url);
-      expect(lot.source_url).toBe(lot.url);
+      expect(lot.sourceUrl).toBe('https://www.invaluable.com/auction-lot-19th-century-german-school-oil-painting-359-c-abc123def0');
       expect(lot.lotRef).toBe('ABC123DEF0');
-      expect(lot.lot_ref).toBe('ABC123DEF0');
     });
   });
 
@@ -146,13 +141,8 @@ describe('ValuerService image contract', () => {
       const result = await service.batchSearch({ searches: [{ query: 'unknown currency lot', limit: 1 }] });
       const lot = result.searches[0].result.data.lots[0];
 
-      expect(lot.price).toMatchObject({
-        amount: 1200,
-        currency: null,
-        symbol: null,
-      });
-      expect(lot.currencyCode).toBeNull();
-      expect(lot.currencySymbol).toBeNull();
+      expect(lot.priceRealised).toBe(1200);
+      expect(lot.currency).toBeNull();
     });
   });
 });

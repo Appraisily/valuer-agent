@@ -11,8 +11,8 @@ describe('currency comparability summary', () => {
   it('marks single-currency comparable prices as comparable', async () => {
     const summarizeComparableCurrencies = await loadCurrencySummary();
     const summary = summarizeComparableCurrencies([
-      { title: 'Lot A', price: { amount: 100, currency: 'usd', symbol: '$' } },
-      { title: 'Lot B', price: { amount: 125, currency: 'USD', symbol: '$' } },
+      { schemaVersion: 1, title: 'Lot A', priceRealised: 100, currency: 'usd' },
+      { schemaVersion: 1, title: 'Lot B', priceRealised: 125, currency: 'USD' },
     ]);
 
     expect(summary).toMatchObject({
@@ -28,8 +28,8 @@ describe('currency comparability summary', () => {
   it('marks mixed currencies as not directly comparable', async () => {
     const summarizeComparableCurrencies = await loadCurrencySummary();
     const summary = summarizeComparableCurrencies([
-      { title: 'Lot A', price: { amount: 100, currency: 'USD', symbol: '$' } },
-      { title: 'Lot B', price: { amount: 125, currency: 'EUR', symbol: 'EUR' } },
+      { schemaVersion: 1, title: 'Lot A', priceRealised: 100, currency: 'USD' },
+      { schemaVersion: 1, title: 'Lot B', priceRealised: 125, currency: 'EUR' },
     ]);
 
     expect(summary.status).toBe('mixed');
@@ -41,7 +41,7 @@ describe('currency comparability summary', () => {
   it('marks missing currencies as unknown instead of assuming USD', async () => {
     const summarizeComparableCurrencies = await loadCurrencySummary();
     const summary = summarizeComparableCurrencies([
-      { title: 'Lot A', price: { amount: 100, currency: null, symbol: null } },
+      { schemaVersion: 1, title: 'Lot A', priceRealised: 100, currency: null },
     ]);
 
     expect(summary).toMatchObject({

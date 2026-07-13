@@ -132,8 +132,8 @@ const health = await waitForHealth();
 assert(health.ok, '/health should return 2xx', health);
 assert(health.json?.status === 'ok', '/health should report status ok', health.json);
 assert(health.json?.service === 'valuer-bridge', '/health should identify valuer-bridge', health.json);
-assert(health.json?.provider === 'scraper_db', '/health should report scraper_db provider', health.json);
-assert(health.json?.dbConfigured === true, '/health should report dbConfigured=true', health.json);
+assert(health.json?.provider === 'auction_data_api', '/health should report auction_data_api provider', health.json);
+assert(health.json?.apiConfigured === true, '/health should report apiConfigured=true', health.json);
 console.log('[smoke] health ok');
 
 const batch = await request('/v2/search/batch', {

@@ -3,8 +3,7 @@
   "$id": "https://appraisily.com/schemas/comparable-lot-v1.json",
   "title": "Canonical comparable lot v1",
   "type": "object",
-  "required": ["schemaVersion", "lotUid", "title"],
-  "properties": { "schemaVersion": { "const": 1 }, "lotUid": { "type": "string", "minLength": 1 }, "title": { "type": ["string", "null"] }, "description": { "type": ["string", "null"] }, "houseName": { "type": ["string", "null"] }, "auctionDate": { "type": ["string", "null"], "format": "date-time" }, "priceRealised": { "type": ["number", "null"], "minimum": 0 }, "currency": { "type": ["string", "null"] }, "estimateMin": { "type": ["number", "null"] }, "estimateMax": { "type": ["number", "null"] }, "sourceUrl": { "type": ["string", "null"] }, "thumbUrl": { "type": ["string", "null"] } },
-  "additionalProperties": true
+  "required": ["schemaVersion", "lotUid", "title", "assetStatus"],
+  "properties": { "schemaVersion": { "const": 1 }, "lotUid": { "type": "string", "minLength": 1 }, "lotRef": { "type": ["string", "null"] }, "title": { "type": ["string", "null"] }, "description": { "type": ["string", "null"] }, "houseName": { "type": ["string", "null"] }, "saleType": { "type": ["string", "null"] }, "auctionDate": { "type": ["string", "null"], "format": "date-time" }, "priceRealised": { "type": ["number", "null"], "minimum": 0 }, "currency": { "type": ["string", "null"] }, "estimateMin": { "type": ["number", "null"] }, "estimateMax": { "type": ["number", "null"] }, "lotNumber": { "type": ["string", "null"] }, "sourceUrl": { "type": ["string", "null"] }, "rankingScore": { "type": ["number", "null"], "minimum": 0 }, "assetStatus": { "enum": ["available", "unavailable", "unknown"] }, "assetVerifiedAt": { "type": ["string", "null"], "format": "date-time" }, "imageUrl": { "type": ["string", "null"] } },
+  "additionalProperties": false
 }
-

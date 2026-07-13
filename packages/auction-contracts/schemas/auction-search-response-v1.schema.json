@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://appraisily.com/schemas/auction-search-response-v1.json",
+  "title": "Canonical auction search response v1",
+  "type": "object",
+  "required": ["schemaVersion", "success", "query", "sort", "ranking", "lots", "nextCursor"],
+  "properties": { "schemaVersion": { "const": 1 }, "success": { "const": true }, "query": { "type": "string", "minLength": 1, "maxLength": 500 }, "sort": { "enum": ["relevance", "date_desc", "price_desc", "price_asc"] }, "ranking": { "type": "string" }, "lots": { "type": "array", "maxItems": 200, "items": { "$ref": "comparable-lot-v1.schema.json" } }, "nextCursor": { "type": ["string", "null"] }, "source": { "type": "string" } },
+  "additionalProperties": false
+}

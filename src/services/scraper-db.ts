@@ -2,6 +2,7 @@ import {
   validateComparableLot,
   type CanonicalComparableLotV1,
 } from '@appraisily/auction-contracts';
+import { recordUpstreamSearch } from './metrics.js';
 
 type CurrencyCode = string | null | undefined;
 type NullableString = string | null | undefined;
@@ -12,6 +13,25 @@ export type ScraperDbSearchParams = {
   maxPrice?: number;
   limit?: number;
 };
+
+export type ScraperDbSearchOptions = {
+  deadlineAt?: number;
+  timeoutMs?: number;
+};
+
+export class AuctionDataApiError extends Error {
+  code: string;
+  status: number | null;
+  transient: boolean;
+
+  constructor(code: string, { status = null, transient = false }: { status?: number | null; transient?: boolean } = {}) {
+    super(code);
+    this.name = 'AuctionDataApiError';
+    this.code = code;
+    this.status = status;
+    this.transient = transient;
+  }
+}
 
 export type ScraperDbLot = {
   lotUid: string;
@@ -28,23 +48,34 @@ export type ScraperDbLot = {
   lotNumber: string | null;
   saleType: string | null;
   sourceUrl: string | null;
+  rankingScore: number | null;
   imagePath: string | null;
   imageFileName: string | null;
+  imageUrl: string | null;
+  assetStatus: 'available' | 'unavailable' | 'unknown';
+  assetVerifiedAt: string | null;
 };
 
 export function toCanonicalComparableLot(lot: ScraperDbLot): CanonicalComparableLotV1 {
   const comparable: CanonicalComparableLotV1 = {
     schemaVersion: 1,
     lotUid: lot.lotUid,
+    lotRef: lot.lotRef,
     title: lot.title,
     description: lot.description,
     houseName: lot.houseName,
+    saleType: lot.saleType,
     auctionDate: lot.auctionDate,
     priceRealised: lot.priceRealised,
     currency: lot.currency,
     estimateMin: lot.estimateMin,
     estimateMax: lot.estimateMax,
+    lotNumber: lot.lotNumber,
     sourceUrl: lot.sourceUrl,
+    rankingScore: lot.rankingScore,
+    assetStatus: lot.assetStatus,
+    assetVerifiedAt: lot.assetVerifiedAt,
+    imageUrl: lot.assetStatus === 'available' ? lot.imageUrl : null,
   };
   return validateComparableLot(comparable);
 }
@@ -55,65 +86,12 @@ function normalizeBaseUrl(value: string | undefined | null, fallback: string): s
   return raw.replace(/\/+$/, '');
 }
 
-function toSafeLotNumber(value: NullableString): string | null {
-  const raw = String(value || '').trim();
-  if (!raw) return null;
-  const safe = raw.replace(/[^0-9A-Za-z]+/g, '');
-  return safe ? safe : null;
-}
-
-function normalizeImageFileName(value: NullableString): { base: string; ext: string } | null {
-  const raw = String(value || '').trim();
-  if (!raw) return null;
-  const stripped = raw.split('?')[0].split('#')[0];
-  const clean = stripped.replace(/\\/g, '/').split('/').pop() || '';
-  if (!clean) return null;
-  const idx = clean.lastIndexOf('.');
-  if (idx <= 0 || idx === clean.length - 1) return null;
-  const base = clean.slice(0, idx);
-  const ext = clean.slice(idx + 1);
-  if (!base || !ext) return null;
-  return { base, ext };
-}
-
 export function isPublishedAssetPath(relativePath: NullableString): boolean {
   const clean = String(relativePath || '').trim().replace(/^[\\/]+/, '').replace(/\\/g, '/');
   const segments = clean.split('/').filter(Boolean);
   return segments[0] === 'auction-lots'
     && segments.length >= 3
     && !segments.some((segment) => segment === '.' || segment === '..');
-}
-
-function buildScraperDbPublishedImagePath(opts: {
-  srcPath: NullableString;
-  imageFileName: NullableString;
-  lotNumber: NullableString;
-}): string | null {
-  const lotNumber = toSafeLotNumber(opts.lotNumber);
-  if (!lotNumber) return null;
-
-  const src = String(opts.srcPath || '').trim().replace(/\\/g, '/').replace(/^[\\/]+/, '');
-  if (!src || src.startsWith('gs://')) return null;
-  if (src.startsWith('auction-lots/')) {
-    return isPublishedAssetPath(src) ? src : null;
-  }
-
-  const category = (() => {
-    const match = src.match(/^([^/]+)\/images\//);
-    return match ? match[1] : null;
-  })();
-  if (!category || !/^[A-Za-z0-9._-]+$/.test(category)) return null;
-
-  const file = normalizeImageFileName(opts.imageFileName) || normalizeImageFileName(src);
-  if (!file) return null;
-
-  const [primary, ...suffixParts] = file.base.split('__');
-  const baseNormalized = [String(primary || '').toUpperCase(), ...suffixParts].filter(Boolean).join('__');
-  const extLower = String(file.ext || '').toLowerCase();
-  if (!baseNormalized || !extLower) return null;
-
-  const fileName = `${lotNumber}_${baseNormalized}.${extLower}`;
-  return `auction-lots/scraper-db/${category}/images/${fileName}`;
 }
 
 function currencyToSymbol(code: CurrencyCode): string {
@@ -293,15 +271,19 @@ export class ScraperDbClient {
 
   async close(): Promise<void> {}
 
-  async searchLots(params: ScraperDbSearchParams): Promise<ScraperDbLot[]> {
+  async searchLots(params: ScraperDbSearchParams, options: ScraperDbSearchOptions = {}): Promise<ScraperDbLot[]> {
+    const startedAt = Date.now();
     const query = String(params.query || '').trim();
     if (!query) return [];
     const limit = Math.max(1, Math.min(200, Number(params.limit || 50)));
     const minPrice = Number.isFinite(params.minPrice as number) ? Number(params.minPrice) : null;
     const maxPrice = Number.isFinite(params.maxPrice as number) ? Number(params.maxPrice) : null;
 
+    const remainingMs = options.deadlineAt == null ? Infinity : options.deadlineAt - Date.now();
+    if (remainingMs <= 0) throw new AuctionDataApiError('deadline_exhausted', { transient: true });
     const controller = new AbortController();
-    const timeoutMs = Math.max(1_000, Number(process.env.AUCTION_DATA_API_TIMEOUT_MS || 10_000));
+    const configuredTimeout = Math.max(100, Number(options.timeoutMs || process.env.AUCTION_DATA_API_TIMEOUT_MS || 10_000));
+    const timeoutMs = Math.max(1, Math.min(configuredTimeout, remainingMs));
     const timeout = setTimeout(() => controller.abort(new Error('auction_data_api_timeout')), timeoutMs);
     let rows: any[];
     try {
@@ -314,11 +296,26 @@ export class ScraperDbClient {
         body: JSON.stringify({ query, minPrice, maxPrice, limit }),
         signal: controller.signal,
       });
-      const payload = await response.json() as { success?: boolean; lots?: any[]; error?: string };
-      if (!response.ok || payload.success !== true || !Array.isArray(payload.lots)) {
-        throw new Error(payload.error || `auction_data_api_${response.status}`);
+      const payload = await response.json().catch(() => null) as { success?: boolean; lots?: any[]; error?: string } | null;
+      if (!response.ok || !payload || payload.success !== true || !Array.isArray(payload.lots)) {
+        const code = payload?.error || `auction_data_api_${response.status}`;
+        throw new AuctionDataApiError(code, {
+          status: response.status,
+          transient: response.status === 408 || response.status === 429 || response.status >= 500,
+        });
       }
       rows = payload.lots;
+      recordUpstreamSearch('success', Date.now() - startedAt, rows.length);
+    } catch (error: any) {
+      const status = error instanceof AuctionDataApiError
+        ? (error.code.includes('timeout') || error.code === 'deadline_exhausted' ? 'timeout' : (error.transient ? 'transient_error' : 'permanent_error'))
+        : (controller.signal.aborted || error?.name === 'AbortError' ? 'timeout' : 'transport_error');
+      recordUpstreamSearch(status, Date.now() - startedAt);
+      if (error instanceof AuctionDataApiError) throw error;
+      if (controller.signal.aborted || error?.name === 'AbortError') {
+        throw new AuctionDataApiError('auction_data_api_timeout', { transient: true });
+      }
+      throw new AuctionDataApiError('auction_data_api_transport_error', { transient: true });
     } finally {
       clearTimeout(timeout);
     }
@@ -332,15 +329,8 @@ export class ScraperDbClient {
       const estimateMin = row.estimateMin !== null && row.estimateMin !== undefined ? Number(row.estimateMin) : null;
       const estimateMax = row.estimateMax !== null && row.estimateMax !== undefined ? Number(row.estimateMax) : null;
 
-      const rawImagePath = (row.imagePath || null) as string | null;
-      const publishedImagePath = buildScraperDbPublishedImagePath({
-        srcPath: rawImagePath,
-        imageFileName: row.imageFileName || null,
-        lotNumber: row.lotNumber || null,
-      });
-      const imagePath = publishedImagePath
-        || (isPublishedAssetPath(rawImagePath) ? rawImagePath : null)
-        || rawImagePath;
+      const assetStatus = ['available', 'unavailable'].includes(row.assetStatus) ? row.assetStatus : 'unknown';
+      const imageUrl = assetStatus === 'available' && typeof row.imageUrl === 'string' ? row.imageUrl : null;
       const sourceUrl = deriveInvaluableLotUrl({
         sourceUrl: row.sourceUrl || null,
         title: row.title || null,
@@ -362,8 +352,12 @@ export class ScraperDbClient {
         lotNumber: row.lotNumber || null,
         saleType: row.saleType || null,
         sourceUrl,
-        imagePath,
+        rankingScore: row.rankingScore == null ? null : Number(row.rankingScore),
+        imagePath: imageUrl,
         imageFileName: row.imageFileName || null,
+        imageUrl,
+        assetStatus,
+        assetVerifiedAt: row.assetVerifiedAt || null,
       };
       toCanonicalComparableLot(lot);
       return lot;

@@ -8,28 +8,24 @@ import { ValuerService } from './services/valuer.js';
 import { archiveJSON, storageEnabled } from './services/utils/local-storage.js';
 import { messagingEnabled, publishEvent, closeBroker } from './services/utils/messaging.js';
 import { CONTRACT_VERSIONS } from '@appraisily/auction-contracts';
+import { metricsRegistry, recordLegacyEndpointRequest } from './services/metrics.js';
 
 type CompactLot = {
-  id?: string;
-  lot_uid?: string;
+  schemaVersion: 1;
+  lotUid?: string;
   lotRef?: string;
-  lot_ref?: string;
-  lotId?: string;
   title?: string;
-  price?: { amount?: number; currency?: string | null; symbol?: string | null };
-  auctionHouse?: string;
-  date?: string;
-  url?: string;
-  lotUrl?: string;
-  lot_url?: string;
+  priceRealised?: number | null;
+  currency?: string | null;
+  estimateMin?: number | null;
+  estimateMax?: number | null;
+  houseName?: string;
+  auctionDate?: string;
   sourceUrl?: string;
-  source_url?: string;
-  thumbUrl?: string;
+  rankingScore?: number | null;
   imageUrl?: string;
-  originalUrl?: string;
-  imageOriginalUrl?: string;
-  imagePath?: string;
-  imageFileName?: string;
+  assetStatus?: 'available' | 'unavailable' | 'unknown';
+  assetVerifiedAt?: string;
 };
 
 type TermWithTier = { term: string; tier: string };
@@ -71,23 +67,11 @@ function safeClone<T>(input: T): T | undefined {
 }
 
 function comparableDedupeKey(lot: any, title: string): string {
-  const lotUid = lot?.lot_uid || lot?.lotUid || lot?.id || lot?.lotId;
+  const lotUid = lot?.lotUid;
   if (lotUid) return `lot:${String(lotUid).trim()}`;
-  const url = lot?.url || lot?.lotUrl || lot?.lot_url || lot?.sourceUrl || lot?.source_url || lot?.permalink;
+  const url = lot?.sourceUrl;
   if (url) return `url:${String(url).trim().toLowerCase()}`;
   return `title:${String(title || '').trim().toLowerCase()}`;
-}
-
-function comparableImageFields(lot: any): Pick<CompactLot, 'thumbUrl' | 'imageUrl' | 'originalUrl' | 'imageOriginalUrl'> {
-  const thumbUrl = lot?.thumbUrl || lot?.thumbnail || lot?.thumb || lot?.smallImage || lot?.imageUrl || lot?.image;
-  const imageUrl = lot?.imageUrl || lot?.mediumUrl || lot?.image || thumbUrl;
-  const originalUrl = lot?.originalUrl || lot?.imageOriginalUrl || lot?.fullUrl || imageUrl;
-  return {
-    thumbUrl: thumbUrl ? String(thumbUrl) : undefined,
-    imageUrl: imageUrl ? String(imageUrl) : undefined,
-    originalUrl: originalUrl ? String(originalUrl) : undefined,
-    imageOriginalUrl: originalUrl ? String(originalUrl) : undefined,
-  };
 }
 
 function uniqueTerms(input: unknown): string[] {
@@ -115,11 +99,11 @@ function summarizeComparableCurrencies(lots: CompactLot[]): CurrencyComparabilit
   let unknownCurrencyLots = 0;
 
   for (const lot of lots) {
-    const amount = lot?.price?.amount;
+    const amount = lot?.priceRealised;
     if (typeof amount !== 'number' || !Number.isFinite(amount)) continue;
     pricedLots += 1;
 
-    const currency = normalizeCurrencyCode(lot.price?.currency);
+    const currency = normalizeCurrencyCode(lot.currency);
     if (currency) currencies.add(currency);
     else unknownCurrencyLots += 1;
   }
@@ -201,15 +185,15 @@ const V2BatchSchema = z.object({
     reference: z.number().nullable().optional(),
   }).optional(),
   limits: z.object({
-    perTerm: z.number().optional(),
-    total: z.number().optional(),
-    timeoutMs: z.number().optional(),
-    retries: z.number().optional(),
+    perTerm: z.number().int().min(1).max(200).optional(),
+    total: z.number().int().min(1).max(2000).optional(),
+    timeoutMs: z.number().int().min(100).max(120000).optional(),
+    retries: z.number().int().min(0).max(3).optional(),
   }).optional(),
   options: z.object({
     tierSplit: z.enum(['provided', 'ignore']).optional(),
     concurrency: z.number().optional(),
-    sort: z.string().optional(),
+    sort: z.enum(['relevance', 'date_desc', 'price_desc', 'price_asc']).optional(),
   }).optional(),
   terms: z.object({
     very_specific: TermArraySchema.optional(),
@@ -293,7 +277,7 @@ async function executeBatchSearch(parsed: z.infer<typeof V2BatchSchema>, correla
     skipThumbPublish,
   }, {
     timeoutMs,
-    retry: retries && retries > 0 ? { attempts: retries } : undefined,
+    retry: retries !== undefined ? { attempts: retries + 1 } : undefined,
   });
 
   const uniqueComparableKeys = new Set<string>();
@@ -319,33 +303,28 @@ async function executeBatchSearch(parsed: z.infer<typeof V2BatchSchema>, correla
       if (uniqueComparableKeys.has(dedupeKey)) continue;
       uniqueComparableKeys.add(dedupeKey);
 
-      const priceAmount = (lot?.price && typeof lot.price.amount === 'number')
-        ? lot.price.amount
-        : (typeof lot?.priceResult === 'number' ? lot.priceResult : undefined);
-      const currency = lot?.price?.currency || lot?.currency || lot?.currencyCode || null;
-      const symbol = lot?.price?.symbol || lot?.currencySymbol || null;
-      const lotUid: string | undefined = lot?.lot_uid || lot?.lotUid || lot?.id || lot?.lotId;
-      const lotRef: string | undefined = lot?.lotRef || lot?.lot_ref;
-      const sourceUrl = lot?.url || lot?.lotUrl || lot?.lot_url || lot?.sourceUrl || lot?.source_url;
+      const priceAmount = typeof lot?.priceRealised === 'number' ? lot.priceRealised : null;
+      const currency = lot?.currency || null;
+      const lotUid: string | undefined = lot?.lotUid;
+      const lotRef: string | undefined = lot?.lotRef;
+      const sourceUrl = lot?.sourceUrl;
 
       aggregated.push({
-        id: lotUid ? String(lotUid) : undefined,
-        lot_uid: lotUid ? String(lotUid) : undefined,
+        schemaVersion: 1,
+        lotUid: lotUid ? String(lotUid) : undefined,
         lotRef: lotRef ? String(lotRef) : undefined,
-        lot_ref: lotRef ? String(lotRef) : undefined,
-        lotId: lotUid ? String(lotUid) : undefined,
         title,
-        price: typeof priceAmount === 'number' && Number.isFinite(priceAmount) ? { amount: priceAmount, currency, symbol } : undefined,
-        auctionHouse: lot?.auctionHouse || lot?.house || lot?.houseName,
-        date: lot?.date || lot?.dateTimeLocal || lot?.auctionDate,
-        url: sourceUrl,
-        lotUrl: sourceUrl,
-        lot_url: sourceUrl,
+        priceRealised: typeof priceAmount === 'number' && Number.isFinite(priceAmount) ? priceAmount : null,
+        currency,
+        estimateMin: lot?.estimateMin ?? null,
+        estimateMax: lot?.estimateMax ?? null,
+        houseName: lot?.houseName,
+        auctionDate: lot?.auctionDate,
         sourceUrl,
-        source_url: sourceUrl,
-        ...comparableImageFields(lot),
-        imagePath: lot?.imagePath ? String(lot.imagePath) : undefined,
-        imageFileName: lot?.imageFileName ? String(lot.imageFileName) : undefined,
+        rankingScore: lot?.rankingScore ?? null,
+        imageUrl: lot?.imageUrl ? String(lot.imageUrl) : undefined,
+        assetStatus: lot?.assetStatus || 'unknown',
+        assetVerifiedAt: lot?.assetVerifiedAt || undefined,
       });
     }
   }
@@ -369,6 +348,7 @@ async function executeBatchSearch(parsed: z.infer<typeof V2BatchSchema>, correla
       byQuery,
     },
     batch: batch?.batch || { total: searches.length, completed: (batch?.searches || []).length, failed: 0 },
+    diagnostics: batch?.diagnostics || { partial: false, failures: [] },
     summary: {
       totalItems: aggregated.length,
       uniqueLots: uniqueComparableKeys.size,
@@ -381,6 +361,7 @@ async function executeBatchSearch(parsed: z.infer<typeof V2BatchSchema>, correla
 
 function legacyGone(endpoint: string, replacement = '/v2/search/batch') {
   return (_req: Request, res: Response) => {
+    recordLegacyEndpointRequest(endpoint);
     res.set('Link', `<${replacement}>; rel="alternate"`);
     return res.status(410).json({
       success: false,
@@ -458,6 +439,11 @@ app.get('/health', (_req: Request, res: Response) => {
     auctionContracts: CONTRACT_VERSIONS,
     ...valuer.getReadiness(),
   });
+});
+
+app.get('/metrics', async (_req: Request, res: Response) => {
+  res.set('Content-Type', metricsRegistry.contentType);
+  res.send(await metricsRegistry.metrics());
 });
 
 installRequestLogging();

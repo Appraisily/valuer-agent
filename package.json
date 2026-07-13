@@ -22,6 +22,7 @@
     "@appraisily/messaging": "file:./packages/messaging",
     "amqplib": "^0.10.9",
     "express": "^4.22.2",
+    "prom-client": "^15.1.3",
     "zod": "^3.22.4"
   },
   "devDependencies": {

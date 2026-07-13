@@ -1,5 +1,5 @@
-export type ContractName = 'pageArtifact' | 'validEmptyArtifact' | 'scrapeJobRequest' | 'scrapeJobStatus' | 'scrapeJobResult' | 'pageAudit' | 'noveltyDecision' | 'ingestCommand' | 'ingestResult' | 'thumbnailPublishRequest' | 'thumbnailPublishResult' | 'comparableLot';
-export declare class AuctionContractError extends TypeError { contract: string; code: 'INVALID_CONTRACT' | 'UNSUPPORTED_SCHEMA_VERSION'; }
+export type ContractName = 'pageArtifact' | 'validEmptyArtifact' | 'scrapeJobRequest' | 'scrapeJobStatus' | 'scrapeJobResult' | 'pageAudit' | 'noveltyDecision' | 'ingestCommand' | 'ingestResult' | 'thumbnailPublishRequest' | 'thumbnailPublishResult' | 'comparableLot' | 'auctionSearchRequest' | 'auctionSearchResponse';
+export declare class AuctionContractError extends TypeError { contract: string; code: string; }
 export declare const CONTRACT_VERSIONS: Readonly<Record<ContractName, 1>>;
 export declare const INGEST_COMMAND_STATUSES: readonly string[];
 export declare const INGEST_COMMAND_TERMINAL_STATUSES: readonly string[];
@@ -16,7 +16,11 @@ export interface IngestCommandV1 { schemaVersion: 1; commandId: string; idempote
 export interface IngestResultV1 { schemaVersion: 1; commandId: string; status: string; attempts: number; result?: Record<string, unknown> | null; errorReason?: string | null; finishedAt?: string | null; }
 export interface ThumbnailPublishRequestV1 { schemaVersion: 1; requestId: string; correlationId: string; lotUids: string[]; maxConcurrency?: number; }
 export interface ThumbnailPublishResultV1 { schemaVersion: 1; requestId: string; requested: number; processed: number; publishedCount: number; skippedCount: number; failedCount: number; }
-export interface CanonicalComparableLotV1 { schemaVersion: 1; lotUid: string; title: string | null; description?: string | null; houseName?: string | null; auctionDate?: string | null; priceRealised?: number | null; currency?: string | null; estimateMin?: number | null; estimateMax?: number | null; sourceUrl?: string | null; thumbUrl?: string | null; }
+export type AuctionSearchSortV1 = 'relevance' | 'date_desc' | 'price_desc' | 'price_asc';
+export type AuctionAssetStatusV1 = 'available' | 'unavailable' | 'unknown';
+export interface CanonicalComparableLotV1 { schemaVersion: 1; lotUid: string; lotRef?: string | null; title: string | null; description?: string | null; houseName?: string | null; saleType?: string | null; auctionDate?: string | null; priceRealised?: number | null; currency?: string | null; estimateMin?: number | null; estimateMax?: number | null; lotNumber?: string | null; sourceUrl?: string | null; rankingScore?: number | null; assetStatus: AuctionAssetStatusV1; assetVerifiedAt?: string | null; imageUrl?: string | null; }
+export interface AuctionSearchRequestV1 { schemaVersion: 1; query: string; sort?: AuctionSearchSortV1; limit?: number; cursor?: string | null; filters?: { minPrice?: number | null; maxPrice?: number | null; dateFrom?: string | null; dateTo?: string | null; categories?: string[]; auctionHouses?: string[]; keywords?: string[]; artist?: string | null; requireImages?: boolean; requirePublicImages?: boolean }; }
+export interface AuctionSearchResponseV1 { schemaVersion: 1; success: true; query: string; sort: AuctionSearchSortV1; ranking: string; lots: CanonicalComparableLotV1[]; nextCursor: string | null; source?: string; }
 export declare function validateContract<T = unknown>(contract: ContractName, input: T): T;
 export declare function validatePageArtifact<T extends PageArtifactV1>(input: T): T;
 export declare function validateValidEmptyArtifact<T extends ValidEmptyArtifactV1>(input: T): T;
@@ -30,5 +34,6 @@ export declare function validateIngestResult<T extends IngestResultV1>(input: T)
 export declare function validateThumbnailPublishRequest<T extends ThumbnailPublishRequestV1>(input: T): T;
 export declare function validateThumbnailPublishResult<T extends ThumbnailPublishResultV1>(input: T): T;
 export declare function validateComparableLot<T extends CanonicalComparableLotV1>(input: T): T;
+export declare function validateAuctionSearchRequest<T extends AuctionSearchRequestV1>(input: T): T;
+export declare function validateAuctionSearchResponse<T extends AuctionSearchResponseV1>(input: T): T;
 export declare function isTerminalIngestCommandStatus(status: unknown): boolean;
-

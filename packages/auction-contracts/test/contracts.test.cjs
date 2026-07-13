@@ -23,6 +23,8 @@ test('all v1 fixtures pass their contract validators', () => {
   contracts.validateThumbnailPublishRequest(thumb.request);
   contracts.validateThumbnailPublishResult(thumb.result);
   contracts.validateComparableLot(read('comparable-lot-v1.json'));
+  contracts.validateAuctionSearchRequest(read('auction-search-request-v1.json'));
+  contracts.validateAuctionSearchResponse(read('auction-search-response-v1.json'));
 });
 
 test('unsupported contract versions fail explicitly', () => {
@@ -44,4 +46,3 @@ test('ingest references reject traversal', () => {
   command.artifact.path = '../customer-data';
   assert.throws(() => contracts.validateIngestCommand(command), /storage-relative path/);
 });
-

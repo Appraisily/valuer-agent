@@ -1,5 +1,6 @@
 import { ValuerResponse, ValuerLot } from './types.js';
-import { ScraperDbClient, buildLotImageAssetContract } from './scraper-db.js';
+import { AuctionDataApiError, ScraperDbClient, buildLotImageAssetContract } from './scraper-db.js';
+import { recordBatchOutcome } from './metrics.js';
 
 if (process.env.SCRAPPER_THUMBS_PUBLISH_URL && !process.env.SCRAPER_ORCHESTRATOR_THUMBS_PUBLISH_URL) {
   console.warn('[env] SCRAPPER_THUMBS_PUBLISH_URL is deprecated; use SCRAPER_ORCHESTRATOR_THUMBS_PUBLISH_URL');
@@ -29,22 +30,24 @@ type ThumbPublishResult = Map<string, { thumbUrl: string | null; srcPath: string
 export class ValuerService {
   private scraperDb: ScraperDbReader;
   private thumbPublisher?: (lotUids: string[]) => Promise<ThumbPublishResult>;
+  private transportFailures = 0;
+  private circuitOpenUntil = 0;
 
   constructor(deps: { scraperDb?: ScraperDbReader; thumbPublisher?: (lotUids: string[]) => Promise<ThumbPublishResult> } = {}) {
     this.scraperDb = deps.scraperDb || new ScraperDbClient();
     this.thumbPublisher = deps.thumbPublisher;
   }
 
-  getReadiness(): { provider: 'scraper_db'; dbConfigured: boolean } {
-    return { provider: 'scraper_db', dbConfigured: true };
+  getReadiness(): { provider: 'auction_data_api'; apiConfigured: boolean } {
+    return { provider: 'auction_data_api', apiConfigured: true };
   }
 
   async close(): Promise<void> {
     await this.scraperDb.close();
   }
 
-  async batchSearch(body: BatchSearchBody, _options?: SearchOptions): Promise<any> {
-    return this.batchSearchScraperDb(body);
+  async batchSearch(body: BatchSearchBody, options: SearchOptions = {}): Promise<any> {
+    return this.batchSearchScraperDb(body, options);
   }
 
   private async publishLotThumbs(lotUids: string[]): Promise<ThumbPublishResult> {
@@ -123,9 +126,76 @@ export class ValuerService {
     }
   }
 
-  private async batchSearchScraperDb(body: BatchSearchBody): Promise<any> {
+  private circuitThreshold(): number {
+    return Math.max(1, Number(process.env.AUCTION_DATA_API_CIRCUIT_FAILURES || 5));
+  }
+
+  private circuitCooldownMs(): number {
+    return Math.max(1_000, Number(process.env.AUCTION_DATA_API_CIRCUIT_COOLDOWN_MS || 15_000));
+  }
+
+  private ensureCircuitAvailable(): void {
+    if (this.circuitOpenUntil > Date.now()) {
+      throw new AuctionDataApiError('auction_data_api_circuit_open', { transient: true });
+    }
+    if (this.circuitOpenUntil) {
+      this.circuitOpenUntil = 0;
+      this.transportFailures = 0;
+    }
+  }
+
+  private recordTransportSuccess(): void {
+    this.transportFailures = 0;
+    this.circuitOpenUntil = 0;
+  }
+
+  private recordTransportFailure(error: unknown): void {
+    if (!(error instanceof AuctionDataApiError) || !error.transient) return;
+    this.transportFailures += 1;
+    if (this.transportFailures >= this.circuitThreshold()) {
+      this.circuitOpenUntil = Date.now() + this.circuitCooldownMs();
+    }
+  }
+
+  private async searchWithBudget(
+    params: { query: string; minPrice?: number; maxPrice?: number; limit?: number },
+    options: SearchOptions,
+    deadlineAt: number,
+  ): Promise<{ lots: Awaited<ReturnType<ScraperDbReader['searchLots']>>; attempts: number }> {
+    const maxAttempts = Math.max(1, Math.min(4, Math.floor(options.retry?.attempts || 1)));
+    const baseDelayMs = Math.max(10, Math.floor(options.retry?.baseDelayMs || 100));
+    const maxDelayMs = Math.max(baseDelayMs, Math.floor(options.retry?.maxDelayMs || 750));
+    let attempts = 0;
+    let lastError: unknown;
+
+    while (attempts < maxAttempts) {
+      if (Date.now() >= deadlineAt) throw new AuctionDataApiError('deadline_exhausted', { transient: true });
+      this.ensureCircuitAvailable();
+      attempts += 1;
+      try {
+        const lots = await this.scraperDb.searchLots(params, { deadlineAt });
+        this.recordTransportSuccess();
+        return { lots, attempts };
+      } catch (error) {
+        lastError = error;
+        this.recordTransportFailure(error);
+        const retryable = error instanceof AuctionDataApiError && error.transient;
+        if (!retryable || attempts >= maxAttempts) break;
+        const delayMs = Math.min(maxDelayMs, baseDelayMs * (2 ** (attempts - 1)));
+        const remainingMs = deadlineAt - Date.now();
+        if (remainingMs <= delayMs) throw new AuctionDataApiError('deadline_exhausted', { transient: true });
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      }
+    }
+    throw lastError || new AuctionDataApiError('auction_data_api_transport_error', { transient: true });
+  }
+
+  private async batchSearchScraperDb(body: BatchSearchBody, options: SearchOptions): Promise<any> {
     const searches = Array.isArray(body?.searches) ? body.searches : [];
     const startedAt = new Date().toISOString();
+    const requestedTimeout = Number(options.timeoutMs || process.env.VALUER_BATCH_HTTP_TIMEOUT_MS || 30_000);
+    const timeoutMs = Math.max(100, Math.min(120_000, Number.isFinite(requestedTimeout) ? requestedTimeout : 30_000));
+    const deadlineAt = Date.now() + timeoutMs;
     const skipThumbPublish = (() => {
       if (body.skipThumbPublish) return true;
       const raw = String(process.env.SCRAPER_DB_PUBLISH_THUMBS_DISABLED || '').toLowerCase().trim();
@@ -145,69 +215,43 @@ export class ValuerService {
       const minPrice = coerceNumber(search?.priceResult?.min);
       const maxPrice = coerceNumber(search?.priceResult?.max);
       const limit = coerceNumber(search?.limit);
-      const lots = await this.scraperDb.searchLots({ query, minPrice, maxPrice, limit });
+      const { lots, attempts } = await this.searchWithBudget({ query, minPrice, maxPrice, limit }, options, deadlineAt);
 
       const mappedLots = lots.map((lot) => {
-        const imageAssets = buildLotImageAssetContract(lot.imagePath);
+        const imageAssets = buildLotImageAssetContract(lot.imageUrl);
         return {
-          id: lot.lotUid,
-          lot_uid: lot.lotUid,
+          schemaVersion: 1 as const,
+          lotUid: lot.lotUid,
           lotRef: lot.lotRef,
-          lot_ref: lot.lotRef,
           title: lot.title,
           description: lot.description,
-          auctionHouse: lot.houseName,
           houseName: lot.houseName,
-          house: lot.houseName,
-          date: lot.auctionDate,
-          dateTimeLocal: lot.auctionDate,
+          saleType: lot.saleType,
           auctionDate: lot.auctionDate,
-          price: lot.priceRealised !== null ? {
-            amount: lot.priceRealised,
-            currency: lot.currency || null,
-            symbol: lot.currencySymbol || null,
-          } : undefined,
           priceRealised: lot.priceRealised,
-          currency: lot.currency || null,
-          currencyCode: lot.currency || null,
-          currencySymbol: lot.currencySymbol || null,
+          currency: lot.currency,
           estimateMin: lot.estimateMin,
           estimateMax: lot.estimateMax,
-          estimateLow: lot.estimateMin,
-          estimateHigh: lot.estimateMax,
           lotNumber: lot.lotNumber,
-          saleType: lot.saleType,
-          url: lot.sourceUrl,
-          lotUrl: lot.sourceUrl,
-          lot_url: lot.sourceUrl,
           sourceUrl: lot.sourceUrl,
-          source_url: lot.sourceUrl,
-          thumbUrl: imageAssets.thumbUrl,
-          thumbnail: imageAssets.thumbUrl,
+          rankingScore: lot.rankingScore,
           imageUrl: imageAssets.imageUrl,
-          image: imageAssets.imageUrl || imageAssets.thumbUrl,
-          thumb: imageAssets.thumbUrl,
-          originalUrl: imageAssets.originalUrl,
-          imageOriginalUrl: imageAssets.imageOriginalUrl,
-          imagePath: imageAssets.imagePath,
-          thumbPath: imageAssets.thumbPath,
-          mediumPath: imageAssets.mediumPath,
-          originalPath: imageAssets.originalPath,
-          imageFileName: lot.imageFileName,
+          assetStatus: lot.assetStatus,
+          assetVerifiedAt: lot.assetVerifiedAt,
         };
       });
 
       const missingLotUids = lots
-        .filter((lot, index) => !mappedLots[index]?.thumbUrl && lot.lotUid && (lot.imagePath || lot.imageFileName))
+        .filter((lot, index) => !mappedLots[index]?.imageUrl && lot.lotUid && (lot.imagePath || lot.imageFileName))
         .map((lot) => String(lot.lotUid));
 
-      return { query, minPrice, maxPrice, mappedLots, missingLotUids };
+      return { query, minPrice, maxPrice, mappedLots, missingLotUids, attempts };
     });
 
     const results = await runLimited(tasks, concurrency);
     const publishedThumbs = new Map<string, { thumbUrl: string | null; srcPath: string | null }>();
 
-    if (!skipThumbPublish) {
+    if (!skipThumbPublish && deadlineAt - Date.now() > 1_000) {
       const missingAll: string[] = [];
       for (const settled of results) {
         if (settled?.status !== 'fulfilled') continue;
@@ -221,9 +265,18 @@ export class ValuerService {
     const searchesOut = results.map((settled, index) => {
       if (settled.status !== 'fulfilled') {
         const failedQuery = String(searches[index]?.query || '').trim();
+        const reason = (settled as PromiseRejectedResult).reason;
+        const errorCode = reason instanceof AuctionDataApiError
+          ? reason.code
+          : String(reason?.message || reason || 'scraper_db_error');
         return {
           query: failedQuery,
-          error: String((settled as PromiseRejectedResult).reason?.message || (settled as PromiseRejectedResult).reason || 'scraper_db_error'),
+          error: errorCode,
+          diagnostic: {
+            kind: reason instanceof AuctionDataApiError && reason.transient ? 'upstream_transient' : 'upstream_permanent',
+            upstreamStatus: reason instanceof AuctionDataApiError ? reason.status : null,
+            retryable: reason instanceof AuctionDataApiError ? reason.transient : false,
+          },
           result: {
             success: false,
             timestamp: startedAt,
@@ -236,23 +289,15 @@ export class ValuerService {
       const query = String(settled.value?.query || '').trim();
       const mappedLots = Array.isArray(settled.value?.mappedLots) ? settled.value.mappedLots : [];
       for (const lot of mappedLots) {
-        const lotUid = String(lot?.lot_uid || lot?.id || '').trim();
+        const lotUid = String(lot?.lotUid || '').trim();
         if (!lotUid) continue;
         const published = publishedThumbs.get(lotUid);
         if (!published?.thumbUrl && !published?.srcPath) continue;
         const imageAssets = buildLotImageAssetContract(published.srcPath || published.thumbUrl);
         if (!imageAssets.thumbUrl && !imageAssets.imageUrl) continue;
-        lot.thumbUrl = imageAssets.thumbUrl || imageAssets.imageUrl;
-        lot.thumbnail = lot.thumbUrl;
-        lot.imageUrl = imageAssets.imageUrl || lot.thumbUrl;
-        lot.image = lot.imageUrl || lot.thumbUrl;
-        lot.thumb = lot.thumbUrl;
-        lot.originalUrl = imageAssets.originalUrl || lot.imageUrl || lot.thumbUrl;
-        lot.imageOriginalUrl = imageAssets.imageOriginalUrl || lot.originalUrl;
-        if (imageAssets.imagePath) lot.imagePath = imageAssets.imagePath;
-        if (imageAssets.thumbPath) lot.thumbPath = imageAssets.thumbPath;
-        if (imageAssets.mediumPath) lot.mediumPath = imageAssets.mediumPath;
-        if (imageAssets.originalPath) lot.originalPath = imageAssets.originalPath;
+        lot.imageUrl = imageAssets.imageUrl || imageAssets.thumbUrl;
+        lot.assetStatus = lot.imageUrl ? 'available' : lot.assetStatus;
+        if (lot.imageUrl) lot.assetVerifiedAt = new Date().toISOString();
       }
 
       const response: ValuerResponse = {
@@ -271,14 +316,25 @@ export class ValuerService {
         },
       };
 
-      return { query, result: response };
+      return { query, attempts: settled.value.attempts, result: response };
     });
 
     const completed = searchesOut.filter((search: any) => !search.error).length;
     const failed = searchesOut.length - completed;
+    recordBatchOutcome(completed, failed);
     return {
-      provider: 'scraper_db',
+      provider: 'auction_data_api',
       batch: { total: searchesOut.length, completed, failed },
+      diagnostics: {
+        deadlineMs: timeoutMs,
+        partial: completed > 0 && failed > 0,
+        deadlineExhausted: Date.now() >= deadlineAt,
+        failures: searchesOut.filter((search: any) => search.error).map((search: any) => ({
+          query: search.query,
+          error: search.error,
+          ...search.diagnostic,
+        })),
+      },
       searches: searchesOut,
     };
   }

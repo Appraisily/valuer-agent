@@ -1,0 +1,1 @@
+{ "schemaVersion": 1, "query": "Wedgwood jasperware vase", "sort": "relevance", "limit": 6, "cursor": null, "filters": { "minPrice": 100, "maxPrice": 5000 } }
