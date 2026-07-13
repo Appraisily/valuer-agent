@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://appraisily.com/schemas/novelty-decision-v1.json",
+  "title": "Novelty decision v1",
+  "type": "object",
+  "required": ["schemaVersion", "keyword", "decision", "eligibleLotUids"],
+  "properties": { "schemaVersion": { "const": 1 }, "keyword": { "type": "string", "minLength": 1 }, "decision": { "enum": ["promote", "images_only", "skip"] }, "eligibleLotUids": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true } },
+  "additionalProperties": true
+}
+

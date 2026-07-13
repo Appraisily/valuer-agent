@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://appraisily.com/schemas/valid-empty-artifact-v1.json",
+  "title": "Explicit valid-empty page artifact v1",
+  "allOf": [
+    { "$ref": "page-artifact-v1.schema.json" },
+    {
+      "properties": {
+        "_appraisilyPageArtifact": {
+          "properties": { "schemaVersion": { "const": 1 }, "outcome": { "const": "empty_valid" }, "lotCount": { "const": 0 }, "declaredTotal": { "const": 0 } },
+          "required": ["schemaVersion", "outcome", "lotCount", "declaredTotal"]
+        }
+      }
+    }
+  ]
+}
+

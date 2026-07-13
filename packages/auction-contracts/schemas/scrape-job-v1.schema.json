@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://appraisily.com/schemas/scrape-job-v1.json",
+  "title": "Scrape job request, status, and result v1",
+  "$defs": {
+    "request": {
+      "type": "object",
+      "required": ["schemaVersion", "jobId", "idempotencyKey", "correlationId", "laneId", "query", "requestedAt"],
+      "properties": { "schemaVersion": { "const": 1 }, "jobId": { "type": "string", "minLength": 1 }, "idempotencyKey": { "type": "string", "minLength": 1 }, "correlationId": { "type": "string", "minLength": 1 }, "laneId": { "type": "string", "minLength": 1 }, "query": { "type": "string", "minLength": 1 }, "requestedAt": { "type": "string", "format": "date-time" }, "params": { "type": "object" } },
+      "additionalProperties": true
+    },
+    "status": {
+      "type": "object",
+      "required": ["schemaVersion", "jobId", "status", "updatedAt"],
+      "properties": { "schemaVersion": { "const": 1 }, "jobId": { "type": "string", "minLength": 1 }, "status": { "enum": ["queued", "running", "cancelling", "completed", "failed", "cancelled"] }, "updatedAt": { "type": "string", "format": "date-time" }, "correlationId": { "type": "string" }, "laneId": { "type": "string" }, "progress": { "type": "object" } },
+      "additionalProperties": true
+    },
+    "result": {
+      "type": "object",
+      "required": ["schemaVersion", "jobId", "status", "finishedAt"],
+      "properties": { "schemaVersion": { "const": 1 }, "jobId": { "type": "string", "minLength": 1 }, "status": { "enum": ["completed", "failed", "cancelled"] }, "finishedAt": { "type": "string", "format": "date-time" }, "artifactPath": { "type": "string" }, "summary": { "type": "object" }, "error": { "type": ["string", "null"] } },
+      "additionalProperties": true
+    }
+  }
+}
+

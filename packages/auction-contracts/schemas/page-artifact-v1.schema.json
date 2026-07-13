@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://appraisily.com/schemas/page-artifact-v1.json",
+  "title": "Page artifact v1",
+  "type": "object",
+  "required": ["_appraisilyPageArtifact"],
+  "properties": {
+    "_appraisilyPageArtifact": {
+      "type": "object",
+      "required": ["schemaVersion", "pageNumber", "outcome", "lotCount", "declaredTotal", "recordedAt"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "pageNumber": { "type": "integer", "minimum": 1 },
+        "outcome": { "enum": ["results", "empty_valid", "empty_unverified", "invalid_schema"] },
+        "lotCount": { "type": "integer", "minimum": 0 },
+        "declaredTotal": { "type": ["integer", "null"], "minimum": 0 },
+        "recordedAt": { "type": "string", "format": "date-time" }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}
+

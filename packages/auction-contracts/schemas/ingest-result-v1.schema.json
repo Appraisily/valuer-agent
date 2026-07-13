@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://appraisily.com/schemas/ingest-result-v1.json",
+  "title": "Ingest command result v1",
+  "type": "object",
+  "required": ["schemaVersion", "commandId", "status", "attempts"],
+  "properties": { "schemaVersion": { "const": 1 }, "commandId": { "type": "string", "format": "uuid" }, "status": { "enum": ["pending", "running", "retryable_failure", "success", "partial", "permanent_failure", "rejected_invalid_artifact"] }, "attempts": { "type": "integer", "minimum": 0 }, "result": { "type": ["object", "null"] }, "errorReason": { "type": ["string", "null"] }, "finishedAt": { "type": ["string", "null"], "format": "date-time" } },
+  "additionalProperties": true
+}
+

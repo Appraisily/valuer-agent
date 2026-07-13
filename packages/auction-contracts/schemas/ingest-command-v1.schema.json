@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://appraisily.com/schemas/ingest-command-v1.json",
+  "title": "Ingest command v1",
+  "type": "object",
+  "required": ["schemaVersion", "commandId", "idempotencyKey", "correlationId", "requestedAt", "caller", "subject", "artifact", "audit", "novelty"],
+  "properties": {
+    "schemaVersion": { "const": 1 }, "commandId": { "type": "string", "format": "uuid" }, "idempotencyKey": { "type": "string", "minLength": 1 }, "correlationId": { "type": "string", "minLength": 1 }, "requestedAt": { "type": "string", "format": "date-time" },
+    "caller": { "type": "object", "required": ["identity", "laneId"], "properties": { "identity": { "type": "string", "minLength": 1 }, "laneId": { "type": "string", "minLength": 1 } } },
+    "subject": { "type": "object", "required": ["type", "id"], "properties": { "type": { "enum": ["keyword", "artist"] }, "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,199}$" } } },
+    "artifact": { "type": "object", "required": ["schemaVersion", "bucket", "path"], "properties": { "schemaVersion": { "const": 1 }, "bucket": { "type": "string", "minLength": 1 }, "path": { "type": "string", "minLength": 1 } } },
+    "audit": { "type": "object", "required": ["status", "reference"], "properties": { "status": { "enum": ["ok", "warn"] }, "reference": { "type": "string", "minLength": 1 } } },
+    "novelty": { "type": "object", "required": ["decision", "reference"], "properties": { "decision": { "enum": ["promote", "images_only", "skip"] }, "reference": { "type": "string", "minLength": 1 } } },
+    "options": { "type": "object", "properties": { "force": { "type": "boolean" }, "concurrency": { "type": "integer", "minimum": 1, "maximum": 10 } }
+    }
+  },
+  "additionalProperties": false
+}
+

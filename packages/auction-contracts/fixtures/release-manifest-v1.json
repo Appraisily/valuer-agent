@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "releasedAt": "2026-07-12T00:00:00.000Z",
+  "contracts": { "pageArtifact": 1, "scrapeJobRequest": 1, "scrapeJobStatus": 1, "scrapeJobResult": 1, "pageAudit": 1, "noveltyDecision": 1, "ingestCommand": 1, "ingestResult": 1, "thumbnailPublishRequest": 1, "thumbnailPublishResult": 1, "comparableLot": 1 },
+  "services": {
+    "scrapper": { "image": "localhost:5000/app/scrapper:fixture", "revision": "0000000", "contracts": { "pageArtifact": 1, "scrapeJobRequest": 1, "scrapeJobStatus": 1, "scrapeJobResult": 1 } },
+    "scraper-orchestrator": { "image": "localhost:5000/app/scraper-orchestrator:fixture", "revision": "0000000", "contracts": { "pageArtifact": 1, "pageAudit": 1, "noveltyDecision": 1, "ingestCommand": 1, "ingestResult": 1, "thumbnailPublishRequest": 1, "thumbnailPublishResult": 1, "comparableLot": 1 } },
+    "valuer-bridge": { "image": "localhost:5000/app/valuer-bridge:fixture", "revision": "0000000", "contracts": { "comparableLot": 1 } }
+  }
+}
+

@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://appraisily.com/schemas/page-audit-v1.json",
+  "title": "Page audit v1",
+  "type": "object",
+  "required": ["schemaVersion", "keywordSlug", "status", "pages"],
+  "properties": { "schemaVersion": { "const": 1 }, "keywordSlug": { "type": "string", "minLength": 1 }, "status": { "enum": ["ok", "warn", "fail"] }, "pages": { "type": "integer", "minimum": 0 }, "auditedAt": { "type": "string", "format": "date-time" } },
+  "additionalProperties": true
+}
+

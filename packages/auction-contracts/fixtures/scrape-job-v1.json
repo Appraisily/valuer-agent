@@ -1,0 +1,6 @@
+{
+  "request": { "schemaVersion": 1, "jobId": "job-fixture-1", "idempotencyKey": "fixture:job:1", "correlationId": "correlation-fixture-1", "laneId": "lane-fixture", "query": "antique chair", "requestedAt": "2026-07-12T00:00:00.000Z", "params": { "maxPages": 1 } },
+  "status": { "schemaVersion": 1, "jobId": "job-fixture-1", "status": "running", "updatedAt": "2026-07-12T00:01:00.000Z", "correlationId": "correlation-fixture-1", "laneId": "lane-fixture", "progress": { "stage": "scraping", "page": 1 } },
+  "result": { "schemaVersion": 1, "jobId": "job-fixture-1", "status": "completed", "finishedAt": "2026-07-12T00:02:00.000Z", "artifactPath": "antique-chair/", "summary": { "pagesProcessed": 1 } }
+}
+

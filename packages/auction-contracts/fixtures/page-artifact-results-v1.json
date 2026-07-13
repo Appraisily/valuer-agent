@@ -1,0 +1,7 @@
+{
+  "success": true,
+  "pagination": { "currentPage": 1, "totalPages": 1, "totalItems": 1 },
+  "data": { "lots": [{ "lot_uid": "fixture-lot-1", "title": "Fixture lot" }] },
+  "_appraisilyPageArtifact": { "schemaVersion": 1, "pageNumber": 1, "outcome": "results", "lotCount": 1, "declaredTotal": 1, "recordedAt": "2026-07-12T00:00:00.000Z" }
+}
+

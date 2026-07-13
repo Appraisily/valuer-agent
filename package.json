@@ -13,13 +13,13 @@
     "smoke:deploy": "node scripts/smoke/deploy-smoke.mjs",
     "smoke:env": "node scripts/smoke/runtime-env-smoke.mjs",
     "smoke:logs": "node scripts/smoke/log-smoke.mjs",
-    "env:check": "node ../../env-governance/run-check.mjs --schema services/valuer-bridge",
+    "env:check": "node scripts/validate-env.mjs",
     "prestart": "npm run env:check",
     "predev": "npm run env:check"
   },
   "dependencies": {
-    "@appraisily/auction-contracts": "file:../scraper-orchestrator/packages/auction-contracts",
-    "@appraisily/messaging": "file:/srv/repos/shared/messaging",
+    "@appraisily/auction-contracts": "file:./packages/auction-contracts",
+    "@appraisily/messaging": "file:./packages/messaging",
     "amqplib": "^0.10.9",
     "express": "^4.22.2",
     "zod": "^3.22.4"

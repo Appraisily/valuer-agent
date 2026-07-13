@@ -1,0 +1,23 @@
+{
+  "name": "@appraisily/messaging",
+  "version": "0.2.1",
+  "description": "Canonical messaging abstraction for Appraisily services.",
+  "main": "index.js",
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "check:drift": "node scripts/check-drift.mjs"
+  },
+  "dependencies": {
+    "amqplib": "^0.10.9"
+  },
+  "peerDependencies": {
+    "@google-cloud/pubsub": "^4.0.0 || ^5.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@google-cloud/pubsub": {
+      "optional": true
+    }
+  }
+}
+

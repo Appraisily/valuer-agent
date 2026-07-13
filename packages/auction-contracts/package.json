@@ -1,0 +1,21 @@
+{
+  "name": "@appraisily/auction-contracts",
+  "version": "1.0.0",
+  "description": "Versioned cross-service contracts for Appraisily's auction pipeline.",
+  "type": "module",
+  "main": "./index.cjs",
+  "module": "./index.js",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": { "types": "./index.d.ts", "import": "./index.js", "require": "./index.cjs" },
+    "./schemas/*": "./schemas/*",
+    "./fixtures/*": "./fixtures/*",
+    "./release-manifest.schema.json": "./release-manifest.schema.json"
+  },
+  "files": ["index.cjs", "index.js", "index.d.ts", "schemas", "fixtures", "release-manifest.schema.json", "README.md"],
+  "scripts": { "test": "node --test test/*.test.cjs" },
+  "engines": { "node": ">=18" },
+  "license": "UNLICENSED",
+  "private": true
+}
+

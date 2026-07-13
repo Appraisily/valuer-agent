@@ -3,7 +3,7 @@ import path from 'node:path';
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore - CommonJS module without types
-import localStorageModule from '../../../../_shared/local-storage/index.js';
+import localStorageModule from '../../../packages/local-storage/index.js';
 
 const { Storage } = localStorageModule as { Storage: new (options?: { localRoot?: string }) => any };
 

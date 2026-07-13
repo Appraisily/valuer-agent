@@ -54,7 +54,7 @@ const valuer = new ValuerService();
 const app = express();
 const require = createRequire(import.meta.url);
 type CorsModule = { createCorsMiddleware: (options?: Record<string, unknown>) => RequestHandler };
-const { createCorsMiddleware } = require('../../_shared/cors') as CorsModule;
+const { createCorsMiddleware } = require('../packages/cors') as CorsModule;
 const corsMiddleware = createCorsMiddleware({ logger: console });
 
 app.use(corsMiddleware);

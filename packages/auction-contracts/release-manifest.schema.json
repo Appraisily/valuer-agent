@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://appraisily.com/schemas/auction-release-manifest-v1.json",
+  "title": "Auction platform release manifest v1",
+  "type": "object",
+  "required": ["schemaVersion", "releasedAt", "contracts", "services"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "releasedAt": { "type": "string", "format": "date-time" },
+    "contracts": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 1 } },
+    "services": { "type": "object", "additionalProperties": { "$ref": "#/$defs/service" } }
+  },
+  "$defs": {
+    "service": {
+      "type": "object",
+      "required": ["image", "revision", "contracts"],
+      "properties": {
+        "image": { "type": "string", "minLength": 1 },
+        "revision": { "type": "string", "minLength": 7 },
+        "contracts": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 1 } }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}
+

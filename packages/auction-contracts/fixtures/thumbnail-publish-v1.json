@@ -1,0 +1,5 @@
+{
+  "request": { "schemaVersion": 1, "requestId": "thumb-fixture-1", "correlationId": "correlation-fixture-1", "lotUids": ["fixture-lot-1"], "maxConcurrency": 1 },
+  "result": { "schemaVersion": 1, "requestId": "thumb-fixture-1", "requested": 1, "processed": 1, "publishedCount": 1, "skippedCount": 0, "failedCount": 0, "published": [{ "lotUid": "fixture-lot-1", "status": "ok" }] }
+}
+

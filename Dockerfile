@@ -2,57 +2,25 @@ FROM node:20-slim AS builder
 
 WORKDIR /usr/src/app
 
-ARG SERVICE_DIR=services/valuer-bridge
-ARG SHARED_DIR=services/_shared
-ARG ENV_GOVERNANCE_DIR=env-governance
+COPY package*.json ./
+COPY packages ./packages
+RUN npm ci --install-links
 
-COPY ${SERVICE_DIR}/package*.json ./
-COPY shared/messaging /srv/repos/shared/messaging
-COPY shared/messaging /usr/shared/messaging
-COPY services/scraper-orchestrator/packages/auction-contracts /usr/src/scraper-orchestrator/packages/auction-contracts
-RUN npm install --install-links
-
-COPY ${SERVICE_DIR}/ ./
-COPY ${SHARED_DIR}/local-storage /usr/src/app/_shared/local-storage
-COPY ${SHARED_DIR}/cors /usr/src/app/_shared/cors
-# Maintain compatibility for dist builds that resolve from /usr/src/_shared
-COPY ${SHARED_DIR}/local-storage /usr/src/_shared/local-storage
-COPY ${SHARED_DIR}/cors /usr/src/_shared/cors
-
-# Tools shared for env validation (the app's env-check uses ../../env-governance)
-COPY ${ENV_GOVERNANCE_DIR}/ /usr/env-governance/
-
-# Prepare ENV_GOV_REPO_ROOT so env-governance can locate the schema (.env.names)
-ENV ENV_GOV_REPO_ROOT=/usr/src/env-check
-RUN mkdir -p /usr/src/env-check/services/valuer-bridge \
-    && cp ./env.schema /usr/src/env-check/services/valuer-bridge/.env.names
-
-# Build-time env-check requires the schema keys to exist, but those values do not
-# ship to the runtime image. Generate a placeholder env file directly from
-# `.env.names` so the Dockerfile stays in sync as the schema evolves.
-RUN node -e "const fs=require('fs');const src='env.schema';const dst='/tmp/build.env';const lines=fs.readFileSync(src,'utf8').split(/\\r?\\n/).map(l=>l.trim()).filter(l=>l&&!l.startsWith('#')).map(l=>l.split(/[\\s#]/)[0].trim()).filter(Boolean).map(k=>k+'=build');fs.writeFileSync(dst, lines.join('\\n')+'\\n');"
-ENV ENV_GOV_ENV_FILE=/tmp/build.env
-
-RUN npm run build
+COPY . ./
+RUN node -e "const fs=require('fs');const lines=fs.readFileSync('env.schema','utf8').split(/\r?\n/).map(l=>l.trim()).filter(l=>l&&!l.startsWith('#')).map(l=>l.split(/[\s#]/)[0]).filter(Boolean).map(k=>k+'=build');fs.writeFileSync('/tmp/build.env',lines.join('\n')+'\n')"
+RUN PORT=8080 AUCTION_DATA_API_URL=http://auction-data.invalid AUCTION_DATA_API_KEY=build npm run build
 
 FROM node:20-slim AS runtime
 
 WORKDIR /usr/src/app
-
 COPY --from=builder /usr/src/app/node_modules ./node_modules
-COPY --from=builder /srv/repos/shared/messaging /srv/repos/shared/messaging
 COPY --from=builder /usr/src/app/package*.json ./
+COPY --from=builder /usr/src/app/packages ./packages
 COPY --from=builder /usr/src/app/dist ./dist
-COPY --from=builder /usr/src/app/_shared ./_shared
-COPY --from=builder /usr/src/_shared /usr/src/_shared
-COPY --from=builder /usr/env-governance /usr/env-governance
-COPY --from=builder /usr/src/env-check /usr/src/env-check
+COPY --from=builder /usr/src/app/env.schema ./env.schema
+COPY --from=builder /usr/src/app/scripts/validate-env.mjs ./scripts/validate-env.mjs
 
 ENV NODE_ENV=production
-ENV NODE_PATH=/usr/src/app/node_modules
 ENV PORT=8080
-ENV ENV_GOV_REPO_ROOT=/usr/src/env-check
-
 EXPOSE 8080
-
 CMD ["npm", "start"]
