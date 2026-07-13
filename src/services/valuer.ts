@@ -1,6 +1,10 @@
 import { ValuerResponse, ValuerLot } from './types.js';
 import { ScraperDbClient, buildLotImageAssetContract } from './scraper-db.js';
 
+if (process.env.SCRAPPER_THUMBS_PUBLISH_URL && !process.env.SCRAPER_ORCHESTRATOR_THUMBS_PUBLISH_URL) {
+  console.warn('[env] SCRAPPER_THUMBS_PUBLISH_URL is deprecated; use SCRAPER_ORCHESTRATOR_THUMBS_PUBLISH_URL');
+}
+
 type SearchOptions = {
   timeoutMs?: number;
   retry?: {
@@ -51,7 +55,7 @@ export class ValuerService {
       process.env.SCRAPPER_THUMBS_PUBLISH_URL ||
       'http://scraper-ops-api:8080/api/lot-thumbs/publish'
     ).trim();
-    const apiKey = String(process.env.INGEST_API_KEY || process.env.SCRAPPER_INTERNAL_API_KEY || '').trim();
+    const apiKey = String(process.env.OPS_THUMB_API_KEY || '').trim();
     if (!publishUrl || !apiKey) return new Map();
 
     const limit = (() => {
