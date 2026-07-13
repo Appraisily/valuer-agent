@@ -1,6 +1,3 @@
-import fs from 'node:fs';
-import fsp from 'node:fs/promises';
-import path from 'node:path';
 import {
   validateComparableLot,
   type CanonicalComparableLotV1,
@@ -79,82 +76,18 @@ function normalizeImageFileName(value: NullableString): { base: string; ext: str
   return { base, ext };
 }
 
-function normalizeMediaRoot(value: NullableString): string {
-  const raw = String(value || '').trim();
-  return raw ? raw.replace(/\/+$/, '') : '';
-}
-
-const DEFAULT_MEDIA_ROOT = '/mnt/srv-storage/scrapper-db-data/data';
-const DEFAULT_PUBLIC_ASSETS_ROOT = '/mnt/srv-storage/storage/public';
-const categoryIndexCache = new Map<string, Promise<Set<string>>>();
-
-async function getCategoryIndex(mediaRoot: string): Promise<Set<string>> {
-  const root = normalizeMediaRoot(mediaRoot) || DEFAULT_MEDIA_ROOT;
-  const cached = categoryIndexCache.get(root);
-  if (cached) return cached;
-  const promise = (async () => {
-    try {
-      const entries = await fsp.readdir(root, { withFileTypes: true });
-      const categories = new Set<string>();
-      for (const entry of entries) {
-        if (!entry.isDirectory()) continue;
-        const name = String(entry.name || '').trim();
-        if (!name) continue;
-        categories.add(name);
-      }
-      return categories;
-    } catch {
-      return new Set<string>();
-    }
-  })();
-  categoryIndexCache.set(root, promise);
-  return promise;
-}
-
-const fileExistsCache = new Map<string, boolean>();
-const FILE_EXISTS_CACHE_MAX = 10_000;
-
-function cachedExists(filePath: string): boolean {
-  const hit = fileExistsCache.get(filePath);
-  if (typeof hit === 'boolean') return hit;
-  const exists = fs.existsSync(filePath);
-  if (fileExistsCache.size >= FILE_EXISTS_CACHE_MAX) fileExistsCache.clear();
-  fileExistsCache.set(filePath, exists);
-  return exists;
-}
-
-function normalizePublicAssetsRoot(value: NullableString): string {
-  const raw = String(value || process.env.PUBLIC_STORAGE_ROOT || DEFAULT_PUBLIC_ASSETS_ROOT).trim();
-  return raw ? raw.replace(/\/+$/, '') : DEFAULT_PUBLIC_ASSETS_ROOT;
-}
-
 export function isPublishedAssetPath(relativePath: NullableString): boolean {
   const clean = String(relativePath || '').trim().replace(/^[\\/]+/, '').replace(/\\/g, '/');
-  return clean.startsWith('auction-lots/');
-}
-
-function resolvePublishedAssetAbsolutePath(relativePath: NullableString, publicRoot?: NullableString): string | null {
-  if (!isPublishedAssetPath(relativePath)) return null;
-  const clean = String(relativePath || '').trim().replace(/^[\\/]+/, '').replace(/\\/g, '/');
-  const root = normalizePublicAssetsRoot(publicRoot);
-  const resolved = path.resolve(root, clean);
-  const normalizedRoot = path.resolve(root);
-  if (resolved !== normalizedRoot && !resolved.startsWith(`${normalizedRoot}${path.sep}`)) return null;
-  return resolved;
-}
-
-export function publishedAssetExists(relativePath: NullableString, publicRoot?: NullableString): boolean {
-  const absolutePath = resolvePublishedAssetAbsolutePath(relativePath, publicRoot);
-  if (!absolutePath) return false;
-  return cachedExists(absolutePath);
+  const segments = clean.split('/').filter(Boolean);
+  return segments[0] === 'auction-lots'
+    && segments.length >= 3
+    && !segments.some((segment) => segment === '.' || segment === '..');
 }
 
 function buildScraperDbPublishedImagePath(opts: {
   srcPath: NullableString;
   imageFileName: NullableString;
   lotNumber: NullableString;
-  mediaRoot: string;
-  categories: Set<string>;
 }): string | null {
   const lotNumber = toSafeLotNumber(opts.lotNumber);
   if (!lotNumber) return null;
@@ -162,15 +95,14 @@ function buildScraperDbPublishedImagePath(opts: {
   const src = String(opts.srcPath || '').trim().replace(/\\/g, '/').replace(/^[\\/]+/, '');
   if (!src || src.startsWith('gs://')) return null;
   if (src.startsWith('auction-lots/')) {
-    return publishedAssetExists(src) ? src : null;
+    return isPublishedAssetPath(src) ? src : null;
   }
 
   const category = (() => {
     const match = src.match(/^([^/]+)\/images\//);
     return match ? match[1] : null;
   })();
-  if (!category) return null;
-  if (!opts.categories.has(category)) return null;
+  if (!category || !/^[A-Za-z0-9._-]+$/.test(category)) return null;
 
   const file = normalizeImageFileName(opts.imageFileName) || normalizeImageFileName(src);
   if (!file) return null;
@@ -181,9 +113,6 @@ function buildScraperDbPublishedImagePath(opts: {
   if (!baseNormalized || !extLower) return null;
 
   const fileName = `${lotNumber}_${baseNormalized}.${extLower}`;
-  const absolutePath = path.join(opts.mediaRoot || DEFAULT_MEDIA_ROOT, category, 'images', fileName);
-  if (!cachedExists(absolutePath)) return null;
-
   return `auction-lots/scraper-db/${category}/images/${fileName}`;
 }
 
@@ -299,21 +228,9 @@ function normalizePublicAssetPath(relativePath: NullableString): string | null {
   return clean.startsWith('auction-lots/') ? clean : null;
 }
 
-function lotVariantPath(relativePath: string, variant: 'thumb' | 'medium' | 'original'): string | null {
-  const match = relativePath.match(/^(auction-lots\/[^/]+)\/(thumb|medium|original)\/(.+)$/);
-  if (!match) return null;
-  return `${match[1]}/${variant}/${match[3]}`;
-}
-
-function existingVariantPath(relativePath: string, variant: 'thumb' | 'medium' | 'original'): string | null {
-  const candidate = lotVariantPath(relativePath, variant);
-  if (!candidate) return null;
-  return publishedAssetExists(candidate) ? candidate : null;
-}
-
 export function buildLotImageAssetContract(relativePath: NullableString): LotImageAssetContract {
   const clean = normalizePublicAssetPath(relativePath);
-  if (!clean || !publishedAssetExists(clean)) {
+  if (!clean || !isPublishedAssetPath(clean)) {
     return {
       imagePath: null,
       thumbPath: null,
@@ -328,17 +245,15 @@ export function buildLotImageAssetContract(relativePath: NullableString): LotIma
 
   const variantMatch = clean.match(/^auction-lots\/[^/]+\/(thumb|medium|original)\//);
   const currentVariant = variantMatch?.[1] || null;
-  const currentExists = publishedAssetExists(clean);
-
   const thumbPath = currentVariant === 'thumb'
     ? clean
-    : (existingVariantPath(clean, 'thumb') || (currentExists || !currentVariant ? clean : null));
+    : clean;
   const mediumPath = currentVariant === 'medium'
     ? clean
-    : (existingVariantPath(clean, 'medium') || thumbPath || (currentExists ? clean : null));
+    : clean;
   const originalPath = currentVariant === 'original'
     ? clean
-    : (existingVariantPath(clean, 'original') || (currentExists ? clean : mediumPath || thumbPath));
+    : clean;
 
   const imagePath = originalPath || mediumPath || thumbPath || clean;
   const thumbUrl = buildPublicAssetUrl(thumbPath || imagePath);
@@ -407,9 +322,6 @@ export class ScraperDbClient {
     } finally {
       clearTimeout(timeout);
     }
-    const mediaRoot = normalizeMediaRoot(process.env.SCRAPER_DB_MEDIA_ROOT) || DEFAULT_MEDIA_ROOT;
-    const categories = await getCategoryIndex(mediaRoot);
-
     return rows.map((row: any) => {
       const auctionDate = row.auctionDate ? new Date(row.auctionDate).toISOString() : null;
       const currency = row.currency || null;
@@ -425,8 +337,6 @@ export class ScraperDbClient {
         srcPath: rawImagePath,
         imageFileName: row.imageFileName || null,
         lotNumber: row.lotNumber || null,
-        mediaRoot,
-        categories,
       });
       const imagePath = publishedImagePath
         || (isPublishedAssetPath(rawImagePath) ? rawImagePath : null)
