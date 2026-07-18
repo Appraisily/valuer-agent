@@ -277,7 +277,11 @@ export class ValuerService {
       });
 
       const missingLotUids = lots
-        .filter((lot, index) => !mappedLots[index]?.imageUrl && lot.lotUid && (lot.imagePath || lot.imageFileName))
+        // The Auction Data API may know the exact lot while its legacy asset
+        // status/image hint is stale. The bounded publisher is the canonical
+        // existence check, so let it resolve missing owned assets by lot UID
+        // instead of requiring an already-populated image field.
+        .filter((lot, index) => !mappedLots[index]?.imageUrl && lot.lotUid)
         .map((lot) => String(lot.lotUid));
 
       return { query, minPrice, maxPrice, mappedLots, missingLotUids, attempts };

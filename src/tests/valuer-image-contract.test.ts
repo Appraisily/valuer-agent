@@ -79,6 +79,37 @@ describe('ValuerService image contract', () => {
     });
   });
 
+  it('checks the bounded owned-asset publisher when legacy image hints are absent', async () => {
+    await withPublicAssetsRoot(async (root) => {
+      const relativePath = 'auction-lots/lot-1/thumb/image.jpg';
+      const absolutePath = path.join(root, relativePath);
+      fs.mkdirSync(path.dirname(absolutePath), { recursive: true });
+      fs.writeFileSync(absolutePath, 'image');
+
+      const service = new ValuerService({
+        auctionDataApi: {
+          searchLots: async (_params: AuctionDataApiSearchParams) => [
+            baseLot({ imagePath: null, imageFileName: null, imageUrl: null, assetStatus: 'unknown' }),
+          ],
+          close: async () => undefined,
+        },
+        thumbPublisher: async (lotUids) => {
+          expect(lotUids).toEqual(['lot-1']);
+          return new Map([
+            ['lot-1', { thumbUrl: null, srcPath: relativePath }],
+          ]);
+        },
+      });
+
+      const result = await service.batchSearch({ searches: [{ query: 'test lot', limit: 1 }] });
+      const lot = result.searches[0].result.data.lots[0];
+
+      expect(lot.imageUrl).toBe(`https://assets.example.test/${relativePath}`);
+      expect(lot.assetStatus).toBe('available');
+      expect(lot.assetVerifiedAt).toBeTruthy();
+    });
+  });
+
   it('does not publish unverified fallback image URLs from the publisher response', async () => {
     await withPublicAssetsRoot(async () => {
       const service = new ValuerService({
