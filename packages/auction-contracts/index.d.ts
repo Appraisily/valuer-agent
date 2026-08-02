@@ -14,8 +14,10 @@ export interface PageAuditV1 { schemaVersion: 1; keywordSlug: string; status: 'o
 export interface NoveltyDecisionV1 { schemaVersion: 1; keyword: string; decision: 'promote' | 'images_only' | 'skip'; eligibleLotUids: string[]; }
 export interface IngestCommandV1 { schemaVersion: 1; commandId: string; idempotencyKey: string; correlationId: string; requestedAt: string; caller: { identity: string; laneId: string }; subject: { type: 'keyword' | 'artist'; id: string }; artifact: { schemaVersion: 1; bucket: string; path: string }; audit: { status: 'ok' | 'warn'; reference: string }; novelty: { decision: 'promote' | 'images_only' | 'skip'; reference: string }; options?: { force?: boolean; concurrency?: number }; }
 export interface IngestResultV1 { schemaVersion: 1; commandId: string; status: string; attempts: number; result?: Record<string, unknown> | null; errorReason?: string | null; finishedAt?: string | null; }
-export interface ThumbnailPublishRequestV1 { schemaVersion: 1; requestId: string; correlationId: string; lotUids: string[]; maxConcurrency?: number; }
-export interface ThumbnailPublishResultV1 { schemaVersion: 1; requestId: string; requested: number; processed: number; publishedCount: number; skippedCount: number; failedCount: number; }
+export interface ThumbnailPublishRequestV1 { schemaVersion: 1; requestId: string; correlationId: string; lotUids: string[]; limit?: number; maxConcurrency?: number; }
+export interface ThumbnailPublishOutcomeV1 { lotUid: string; status: 'ok'; srcPath: string; thumbUrl: string; verifiedAt: string; width?: number; height?: number; contentType?: string; sizeBytes?: number; hash?: string; ordinal?: number | null; reused?: boolean; }
+export interface ThumbnailPublishFailureV1 { lotUid: string; status: 'skipped' | 'failed'; reason: string; }
+export interface ThumbnailPublishResultV1 { schemaVersion: 1; requestId: string; correlationId: string; success: true; requested: number; processed: number; publishedCount: number; skippedCount: number; failedCount: number; published: ThumbnailPublishOutcomeV1[]; skipped: ThumbnailPublishFailureV1[]; failed: ThumbnailPublishFailureV1[]; }
 export type AuctionSearchSortV1 = 'relevance' | 'date_desc' | 'price_desc' | 'price_asc';
 export type AuctionAssetStatusV1 = 'available' | 'unavailable' | 'unknown';
 export interface CanonicalComparableLotV1 { schemaVersion: 1; lotUid: string; lotRef?: string | null; title: string | null; description?: string | null; houseName?: string | null; saleType?: string | null; auctionDate?: string | null; priceRealised?: number | null; currency?: string | null; estimateMin?: number | null; estimateMax?: number | null; lotNumber?: string | null; sourceUrl?: string | null; rankingScore?: number | null; assetStatus: AuctionAssetStatusV1; assetVerifiedAt?: string | null; imageUrl?: string | null; }
@@ -37,3 +39,10 @@ export declare function validateComparableLot<T extends CanonicalComparableLotV1
 export declare function validateAuctionSearchRequest<T extends AuctionSearchRequestV1>(input: T): T;
 export declare function validateAuctionSearchResponse<T extends AuctionSearchResponseV1>(input: T): T;
 export declare function isTerminalIngestCommandStatus(status: unknown): boolean;
+export declare const CANONICAL_ASSETS_ORIGIN: 'https://assets.appraisily.com';
+export declare function normalizePublicAuctionLotUid(value: unknown): string | null;
+export declare function normalizePublicAuctionImagePath(value: unknown): string | null;
+export declare function buildPublicAuctionImagePath(input: { lotUid: unknown; filename: unknown }): string | null;
+export declare function normalizeAssetsOrigin(value?: unknown): string | null;
+export declare function buildPublicAuctionImageUrl(relativePath: unknown, baseUrl?: unknown): string | null;
+export declare function normalizePublicAuctionImageUrl(value: unknown, expectedOrigin?: unknown): string | null;

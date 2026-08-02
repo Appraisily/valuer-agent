@@ -1,3 +1,9 @@
+import { randomUUID } from 'node:crypto';
+import {
+  validateThumbnailPublishRequest,
+  validateThumbnailPublishResult,
+} from '@appraisily/auction-contracts';
+import type { ThumbnailPublishResultV1 } from '@appraisily/auction-contracts';
 import { ValuerResponse, ValuerLot } from './types.js';
 import { AuctionDataApiClient, AuctionDataApiError, buildLotImageAssetContract } from './auction-data-api.js';
 import { recordBatchOutcome } from './metrics.js';
@@ -48,7 +54,7 @@ type BatchSearchBody = {
 };
 
 type AuctionDataApiReader = Pick<AuctionDataApiClient, 'searchLots' | 'close'> & Partial<Pick<AuctionDataApiClient, 'checkReadiness'>>;
-type ThumbPublishResult = Map<string, { thumbUrl: string | null; srcPath: string | null }>;
+type ThumbPublishResult = Map<string, { thumbUrl: string; srcPath: string; verifiedAt: string }>;
 
 export class ValuerService {
   private auctionDataApi: AuctionDataApiReader;
@@ -121,17 +127,25 @@ export class ValuerService {
     const id = setTimeout(() => controller.abort(new Error('thumb_publish_timeout')), timeoutMs);
 
     try {
+      const requestId = `valuer-thumb-${randomUUID()}`;
+      const correlationId = randomUUID();
+      const request = validateThumbnailPublishRequest({
+        schemaVersion: 1,
+        requestId,
+        correlationId,
+        lotUids: unique,
+        limit: unique.length,
+        maxConcurrency: Math.max(1, Math.min(2, Number(process.env.SCRAPPER_THUMBS_PUBLISH_CONCURRENCY || 1) || 1)),
+      });
       const res = await fetch(publishUrl, {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
           'x-api-key': apiKey,
+          'x-request-id': requestId,
+          'x-correlation-id': correlationId,
         } as any,
-        body: JSON.stringify({
-          lotUids: unique,
-          limit: unique.length,
-          maxConcurrency: Math.max(1, Math.min(2, Number(process.env.SCRAPPER_THUMBS_PUBLISH_CONCURRENCY || 1) || 1)),
-        }),
+        body: JSON.stringify(request),
         signal: controller.signal,
       });
 
@@ -141,15 +155,20 @@ export class ValuerService {
         return new Map();
       }
 
-      const json: any = await res.json().catch(() => null);
-      const out = new Map<string, { thumbUrl: string | null; srcPath: string | null }>();
-      const published = Array.isArray(json?.published) ? json.published : [];
+      const responseBody = await res.json() as ThumbnailPublishResultV1;
+      const json = validateThumbnailPublishResult(responseBody);
+      if (json.requestId !== requestId || json.correlationId !== correlationId) {
+        throw new Error('thumb_publish_response_identity_mismatch');
+      }
+      const out: ThumbPublishResult = new Map();
+      const published = json.published;
       for (const item of published) {
         const lotUid = String(item?.lotUid || '').trim();
         if (!lotUid) continue;
         out.set(lotUid, {
-          thumbUrl: item?.thumbUrl ? String(item.thumbUrl) : null,
-          srcPath: item?.srcPath ? String(item.srcPath) : null,
+          thumbUrl: String(item.thumbUrl),
+          srcPath: String(item.srcPath),
+          verifiedAt: new Date(item.verifiedAt).toISOString(),
         });
       }
       return out;
@@ -254,6 +273,10 @@ export class ValuerService {
 
       const mappedLots = lots.map((lot) => {
         const imageAssets = buildLotImageAssetContract(lot.imageUrl);
+        const ownedAvailable = lot.assetStatus === 'available'
+          && Boolean(imageAssets.imageUrl)
+          && imageAssets.imagePath?.split('/')[1] === String(lot.lotUid)
+          && Boolean(lot.assetVerifiedAt);
         return {
           schemaVersion: 1 as const,
           lotUid: lot.lotUid,
@@ -270,9 +293,9 @@ export class ValuerService {
           lotNumber: lot.lotNumber,
           sourceUrl: lot.sourceUrl,
           rankingScore: lot.rankingScore,
-          imageUrl: imageAssets.imageUrl,
-          assetStatus: lot.assetStatus,
-          assetVerifiedAt: lot.assetVerifiedAt,
+          imageUrl: ownedAvailable ? imageAssets.imageUrl : null,
+          assetStatus: ownedAvailable ? 'available' : (lot.assetStatus === 'unavailable' ? 'unavailable' : 'unknown'),
+          assetVerifiedAt: ownedAvailable ? lot.assetVerifiedAt : null,
         };
       });
 
@@ -288,7 +311,7 @@ export class ValuerService {
     });
 
     const results = await runLimited(tasks, concurrency);
-    const publishedThumbs = new Map<string, { thumbUrl: string | null; srcPath: string | null }>();
+    const publishedThumbs: ThumbPublishResult = new Map();
 
     if (!skipThumbPublish && deadlineAt - Date.now() > 1_000) {
       const missingAll: string[] = [];
@@ -331,12 +354,12 @@ export class ValuerService {
         const lotUid = String(lot?.lotUid || '').trim();
         if (!lotUid) continue;
         const published = publishedThumbs.get(lotUid);
-        if (!published?.thumbUrl && !published?.srcPath) continue;
-        const imageAssets = buildLotImageAssetContract(published.srcPath || published.thumbUrl);
+        if (!published) continue;
+        const imageAssets = buildLotImageAssetContract(published.srcPath);
         if (!imageAssets.thumbUrl && !imageAssets.imageUrl) continue;
         lot.imageUrl = imageAssets.imageUrl || imageAssets.thumbUrl;
         lot.assetStatus = lot.imageUrl ? 'available' : lot.assetStatus;
-        if (lot.imageUrl) lot.assetVerifiedAt = new Date().toISOString();
+        if (lot.imageUrl) lot.assetVerifiedAt = published.verifiedAt;
       }
 
       const response: ValuerResponse = {

@@ -1,5 +1,7 @@
 'use strict';
 
+const publicAuctionImage = require('./public-auction-image.cjs');
+
 const CONTRACT_VERSIONS = Object.freeze({
   pageArtifact: 1, validEmptyArtifact: 1, scrapeJobRequest: 1, scrapeJobStatus: 1,
   scrapeJobResult: 1, pageAudit: 1, noveltyDecision: 1, ingestCommand: 1,
@@ -11,6 +13,7 @@ const INGEST_COMMAND_STATUSES = Object.freeze(['pending', 'running', 'retryable_
 const SCRAPE_JOB_STATUSES = Object.freeze(['queued', 'running', 'cancelling', 'completed', 'failed', 'cancelled']);
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SAFE_SUBJECT_PATTERN = /^[a-z0-9][a-z0-9._-]{0,199}$/;
+const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 
 class AuctionContractError extends TypeError {
   constructor(contract, message, { code = 'INVALID_CONTRACT' } = {}) {
@@ -141,21 +144,104 @@ function validateIngestResult(input) {
   number(input.attempts, contract, 'attempts', { integer: true, min: 0 }); if (input.finishedAt != null) isoTimestamp(input.finishedAt, contract, 'finishedAt'); return input;
 }
 function validateThumbnailPublishRequest(input) {
-  const contract = 'thumbnailPublishRequest'; object(input, contract); version(input, contract);
+  const contract = 'thumbnailPublishRequest'; object(input, contract);
+  onlyFields(input, ['schemaVersion', 'requestId', 'correlationId', 'lotUids', 'limit', 'maxConcurrency'], contract);
+  version(input, contract);
+  if (typeof input.requestId !== 'string' || typeof input.correlationId !== 'string') {
+    throw new AuctionContractError(contract, 'requestId and correlationId must be strings');
+  }
   string(input.requestId, contract, 'requestId', { max: 100 }); string(input.correlationId, contract, 'correlationId', { max: 255 });
   if (!Array.isArray(input.lotUids) || input.lotUids.length < 1 || input.lotUids.length > 100) throw new AuctionContractError(contract, 'lotUids must contain 1–100 values');
-  input.lotUids.forEach((value, index) => string(value, contract, `lotUids[${index}]`, { max: 255 })); return input;
+  const uniqueLotUids = new Set();
+  input.lotUids.forEach((value, index) => {
+    if (typeof value !== 'string') throw new AuctionContractError(contract, `lotUids[${index}] must be a string`);
+    const lotUid = string(value, contract, `lotUids[${index}]`, { max: 255 });
+    if (!publicAuctionImage.normalizePublicAuctionLotUid(lotUid)) throw new AuctionContractError(contract, `lotUids[${index}] is not storage-safe`);
+    if (uniqueLotUids.has(lotUid)) throw new AuctionContractError(contract, 'lotUids must be unique');
+    uniqueLotUids.add(lotUid);
+  });
+  if (input.limit != null) {
+    if (typeof input.limit !== 'number') throw new AuctionContractError(contract, 'limit must be a number');
+    number(input.limit, contract, 'limit', { integer: true, min: 1, max: 100 });
+  }
+  if (input.maxConcurrency != null) {
+    if (typeof input.maxConcurrency !== 'number') throw new AuctionContractError(contract, 'maxConcurrency must be a number');
+    number(input.maxConcurrency, contract, 'maxConcurrency', { integer: true, min: 1, max: 4 });
+  }
+  return input;
 }
 function validateThumbnailPublishResult(input) {
-  const contract = 'thumbnailPublishResult'; object(input, contract); version(input, contract); string(input.requestId, contract, 'requestId', { max: 100 });
-  ['requested', 'processed', 'publishedCount', 'skippedCount', 'failedCount'].forEach((field) => number(input[field], contract, field, { integer: true, min: 0 })); return input;
+  const contract = 'thumbnailPublishResult'; object(input, contract);
+  onlyFields(input, ['schemaVersion', 'requestId', 'correlationId', 'success', 'requested', 'processed', 'publishedCount', 'skippedCount', 'failedCount', 'published', 'skipped', 'failed'], contract);
+  version(input, contract);
+  if (typeof input.requestId !== 'string' || typeof input.correlationId !== 'string') {
+    throw new AuctionContractError(contract, 'requestId and correlationId must be strings');
+  }
+  string(input.requestId, contract, 'requestId', { max: 100 }); string(input.correlationId, contract, 'correlationId', { max: 255 });
+  if (input.success !== true) throw new AuctionContractError(contract, 'success must be true');
+  ['requested', 'processed', 'publishedCount', 'skippedCount', 'failedCount'].forEach((field) => {
+    if (typeof input[field] !== 'number') throw new AuctionContractError(contract, `${field} must be a number`);
+    number(input[field], contract, field, { integer: true, min: 0 });
+  });
+  for (const field of ['published', 'skipped', 'failed']) {
+    if (!Array.isArray(input[field])) throw new AuctionContractError(contract, `${field} must be an array`);
+  }
+  const outcomeLotUids = new Set();
+  for (const [index, outcome] of input.published.entries()) {
+    object(outcome, contract, `published[${index}]`);
+    onlyFields(outcome, ['lotUid', 'status', 'srcPath', 'thumbUrl', 'verifiedAt', 'width', 'height', 'contentType', 'sizeBytes', 'hash', 'ordinal', 'reused'], contract, `published[${index}]`);
+    if (typeof outcome.lotUid !== 'string' || !publicAuctionImage.normalizePublicAuctionLotUid(outcome.lotUid)) throw new AuctionContractError(contract, `published[${index}].lotUid must be storage-safe`);
+    if (outcomeLotUids.has(outcome.lotUid)) throw new AuctionContractError(contract, `duplicate outcome for lotUid ${outcome.lotUid}`);
+    outcomeLotUids.add(outcome.lotUid);
+    if (outcome.status !== 'ok') throw new AuctionContractError(contract, `published[${index}].status must be ok`);
+    const srcPath = publicAuctionImage.normalizePublicAuctionImagePath(outcome.srcPath);
+    if (!srcPath || srcPath.split('/')[1] !== outcome.lotUid) throw new AuctionContractError(contract, `published[${index}].srcPath must match lotUid`);
+    const expectedUrl = publicAuctionImage.buildPublicAuctionImageUrl(srcPath);
+    if (outcome.thumbUrl !== expectedUrl) throw new AuctionContractError(contract, `published[${index}].thumbUrl must exactly match srcPath`);
+    isoTimestamp(outcome.verifiedAt, contract, `published[${index}].verifiedAt`);
+    for (const field of ['width', 'height', 'sizeBytes']) {
+      if (outcome[field] != null) {
+        if (typeof outcome[field] !== 'number') throw new AuctionContractError(contract, `published[${index}].${field} must be a number`);
+        number(outcome[field], contract, `published[${index}].${field}`, { integer: true, min: 1 });
+      }
+    }
+    if (outcome.contentType != null) enumeration(outcome.contentType, ['image/jpeg', 'image/webp', 'image/png', 'image/avif'], contract, `published[${index}].contentType`);
+    if (outcome.hash != null && (typeof outcome.hash !== 'string' || !SHA256_PATTERN.test(outcome.hash))) throw new AuctionContractError(contract, `published[${index}].hash must be sha256`);
+    if (outcome.ordinal != null) {
+      if (typeof outcome.ordinal !== 'number') throw new AuctionContractError(contract, `published[${index}].ordinal must be a number or null`);
+      number(outcome.ordinal, contract, `published[${index}].ordinal`, { integer: true, min: 0 });
+    }
+    if (outcome.reused != null && typeof outcome.reused !== 'boolean') throw new AuctionContractError(contract, `published[${index}].reused must be boolean`);
+  }
+  for (const field of ['skipped', 'failed']) {
+    const expectedStatus = field === 'skipped' ? 'skipped' : 'failed';
+    input[field].forEach((outcome, index) => {
+      object(outcome, contract, `${field}[${index}]`);
+      onlyFields(outcome, ['lotUid', 'status', 'reason'], contract, `${field}[${index}]`);
+      if (typeof outcome.lotUid !== 'string' || !publicAuctionImage.normalizePublicAuctionLotUid(outcome.lotUid)) throw new AuctionContractError(contract, `${field}[${index}].lotUid must be storage-safe`);
+      if (outcomeLotUids.has(outcome.lotUid)) throw new AuctionContractError(contract, `duplicate outcome for lotUid ${outcome.lotUid}`);
+      outcomeLotUids.add(outcome.lotUid);
+      if (outcome.status !== expectedStatus) throw new AuctionContractError(contract, `${field}[${index}].status must be ${expectedStatus}`);
+      if (typeof outcome.reason !== 'string') throw new AuctionContractError(contract, `${field}[${index}].reason must be a string`);
+      string(outcome.reason, contract, `${field}[${index}].reason`, { max: 500 });
+    });
+  }
+  if (input.published.length !== input.publishedCount || input.skipped.length !== input.skippedCount || input.failed.length !== input.failedCount) {
+    throw new AuctionContractError(contract, 'outcome counts do not match outcome arrays');
+  }
+  if (input.processed !== outcomeLotUids.size || input.requested < input.processed) {
+    throw new AuctionContractError(contract, 'requested/processed counts do not match outcomes');
+  }
+  return input;
 }
 function validateComparableLot(input) {
   const contract = 'comparableLot'; object(input, contract);
   onlyFields(input, ['schemaVersion', 'lotUid', 'lotRef', 'title', 'description', 'houseName', 'saleType', 'auctionDate', 'priceRealised', 'currency', 'estimateMin', 'estimateMax', 'lotNumber', 'sourceUrl', 'rankingScore', 'assetStatus', 'assetVerifiedAt', 'imageUrl'], contract);
   if (!Object.prototype.hasOwnProperty.call(input, 'title')) throw new AuctionContractError(contract, 'title is required (nullable)');
   if (!Object.prototype.hasOwnProperty.call(input, 'assetStatus')) throw new AuctionContractError(contract, 'assetStatus is required');
-  version(input, contract); string(input.lotUid, contract, 'lotUid', { max: 255 });
+  version(input, contract);
+  if (typeof input.lotUid !== 'string' || !publicAuctionImage.normalizePublicAuctionLotUid(input.lotUid)) throw new AuctionContractError(contract, 'lotUid must be storage-safe');
+  const lotUid = string(input.lotUid, contract, 'lotUid', { max: 255 });
   if (input.lotRef != null) string(input.lotRef, contract, 'lotRef', { max: 255 });
   if (input.title != null) string(input.title, contract, 'title', { max: 2000 });
   if (input.description != null) string(input.description, contract, 'description', { max: 20000 });
@@ -172,9 +258,19 @@ function validateComparableLot(input) {
   if (input.rankingScore != null) number(input.rankingScore, contract, 'rankingScore', { min: 0 });
   const assetStatus = enumeration(input.assetStatus, ['available', 'unavailable', 'unknown'], contract, 'assetStatus');
   if (input.assetVerifiedAt != null) isoTimestamp(input.assetVerifiedAt, contract, 'assetVerifiedAt');
+  if (input.imageUrl != null && typeof input.imageUrl !== 'string') throw new AuctionContractError(contract, 'imageUrl must be a string');
   if (input.imageUrl != null) string(input.imageUrl, contract, 'imageUrl', { max: 2048 });
   if (assetStatus === 'available' && (!input.assetVerifiedAt || !input.imageUrl)) throw new AuctionContractError(contract, 'available asset requires assetVerifiedAt and imageUrl');
-  if (assetStatus !== 'available' && input.imageUrl != null) throw new AuctionContractError(contract, 'non-available asset must not expose imageUrl');
+  if (assetStatus === 'available') {
+    const canonicalUrl = publicAuctionImage.normalizePublicAuctionImageUrl(input.imageUrl);
+    const canonicalPath = canonicalUrl
+      ? publicAuctionImage.normalizePublicAuctionImagePath(decodeURIComponent(new URL(canonicalUrl).pathname.replace(/^\/+/, '')))
+      : null;
+    if (!canonicalUrl || input.imageUrl !== canonicalUrl || canonicalPath?.split('/')[1] !== lotUid) {
+      throw new AuctionContractError(contract, 'available asset imageUrl must be canonical and match lotUid');
+    }
+  }
+  if (assetStatus !== 'available' && (input.imageUrl != null || input.assetVerifiedAt != null)) throw new AuctionContractError(contract, 'non-available asset must not expose imageUrl or assetVerifiedAt');
   return input;
 }
 function validateAuctionSearchRequest(input) {
@@ -222,4 +318,4 @@ const validators = Object.freeze({ pageArtifact: validatePageArtifact, validEmpt
 function validateContract(contract, input) { const validator = validators[contract]; if (!validator) throw new AuctionContractError(contract, 'unknown contract'); return validator(input); }
 function isTerminalIngestCommandStatus(status) { return INGEST_COMMAND_TERMINAL_STATUSES.includes(String(status || '')); }
 
-module.exports = { AuctionContractError, CONTRACT_VERSIONS, INGEST_COMMAND_STATUSES, INGEST_COMMAND_TERMINAL_STATUSES, SCRAPE_JOB_STATUSES, isTerminalIngestCommandStatus, validateAuctionSearchRequest, validateAuctionSearchResponse, validateComparableLot, validateContract, validateIngestCommand, validateIngestResult, validateNoveltyDecision, validatePageArtifact, validatePageAudit, validateScrapeJobRequest, validateScrapeJobResult, validateScrapeJobStatus, validateThumbnailPublishRequest, validateThumbnailPublishResult, validateValidEmptyArtifact };
+module.exports = { AuctionContractError, CONTRACT_VERSIONS, INGEST_COMMAND_STATUSES, INGEST_COMMAND_TERMINAL_STATUSES, SCRAPE_JOB_STATUSES, isTerminalIngestCommandStatus, validateAuctionSearchRequest, validateAuctionSearchResponse, validateComparableLot, validateContract, validateIngestCommand, validateIngestResult, validateNoveltyDecision, validatePageArtifact, validatePageAudit, validateScrapeJobRequest, validateScrapeJobResult, validateScrapeJobStatus, validateThumbnailPublishRequest, validateThumbnailPublishResult, validateValidEmptyArtifact, ...publicAuctionImage };

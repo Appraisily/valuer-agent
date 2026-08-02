@@ -23,13 +23,12 @@ describe('buildLotImageAssetContract', () => {
     });
   });
 
-  it('normalizes auction lot image URLs into the public asset contract', () => {
+  it('rejects legacy original variants instead of inventing a thumbnail', () => {
     withPublicAssetsBase(() => {
       const relativePath = 'auction-lots/example/original/image.jpg';
-      const result = buildLotImageAssetContract(`/${relativePath}`);
-      expect(result.imagePath).toBe(relativePath);
-      expect(result.imageUrl).toBe(`https://assets.example.test/${relativePath}`);
-      expect(result.originalUrl).toBe(`https://assets.example.test/${relativePath}`);
+      const result = buildLotImageAssetContract(relativePath);
+      expect(result.imagePath).toBeNull();
+      expect(result.imageUrl).toBeNull();
     });
   });
 
@@ -58,6 +57,13 @@ describe('buildLotImageAssetContract', () => {
         imageUrl: null,
         originalUrl: null,
       });
+    });
+  });
+
+  it('rejects canonical asset URLs with query parameters', () => {
+    withPublicAssetsBase(() => {
+      const result = buildLotImageAssetContract('https://assets.example.test/auction-lots/example/thumb/image.jpg?token=1');
+      expect(result.imageUrl).toBeNull();
     });
   });
 });

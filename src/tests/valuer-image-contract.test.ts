@@ -48,9 +48,78 @@ function withPublicAssetsRoot<T>(fn: (root: string) => Promise<T>): Promise<T> {
 }
 
 describe('ValuerService image contract', () => {
+  it('sends and validates the strict thumbnail publish request identity', async () => {
+    await withPublicAssetsRoot(async (root) => {
+      const relativePath = 'auction-lots/lot-1/thumb/0123456789abcdef.jpg';
+      const absolutePath = path.join(root, relativePath);
+      fs.mkdirSync(path.dirname(absolutePath), { recursive: true });
+      fs.writeFileSync(absolutePath, 'image');
+
+      const previousFetch = globalThis.fetch;
+      const previousKey = process.env.OPS_THUMB_API_KEY;
+      const previousUrl = process.env.SCRAPER_ORCHESTRATOR_THUMBS_PUBLISH_URL;
+      process.env.OPS_THUMB_API_KEY = 'test-thumb-key';
+      process.env.SCRAPER_ORCHESTRATOR_THUMBS_PUBLISH_URL = 'http://scraper-ops-api:8080/api/lot-thumbs/publish';
+      globalThis.fetch = (async (input, init) => {
+        expect(String(input)).toBe(process.env.SCRAPER_ORCHESTRATOR_THUMBS_PUBLISH_URL);
+        const request = JSON.parse(String(init?.body));
+        const headers = init?.headers as Record<string, string>;
+        expect(request).toMatchObject({
+          schemaVersion: 1,
+          lotUids: ['lot-1'],
+          limit: 1,
+          maxConcurrency: 1,
+        });
+        expect(headers['x-api-key']).toBe('test-thumb-key');
+        expect(headers['x-request-id']).toBe(request.requestId);
+        expect(headers['x-correlation-id']).toBe(request.correlationId);
+        return new Response(JSON.stringify({
+          schemaVersion: 1,
+          requestId: request.requestId,
+          correlationId: request.correlationId,
+          success: true,
+          requested: 1,
+          processed: 1,
+          publishedCount: 1,
+          skippedCount: 0,
+          failedCount: 0,
+          published: [{
+            lotUid: 'lot-1',
+            status: 'ok',
+            srcPath: relativePath,
+            thumbUrl: `https://assets.appraisily.com/${relativePath}`,
+            verifiedAt: '2026-08-01T00:00:00.000Z',
+          }],
+          skipped: [],
+          failed: [],
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }) as typeof fetch;
+
+      try {
+        const service = new ValuerService({
+          auctionDataApi: {
+            searchLots: async (_params: AuctionDataApiSearchParams) => [baseLot()],
+            close: async () => undefined,
+          },
+        });
+        const result = await service.batchSearch({ searches: [{ query: 'test lot', limit: 1 }] });
+        const lot = result.searches[0].result.data.lots[0];
+        expect(lot.imageUrl).toBe(`https://assets.example.test/${relativePath}`);
+        expect(lot.assetStatus).toBe('available');
+        expect(lot.assetVerifiedAt).toBe('2026-08-01T00:00:00.000Z');
+      } finally {
+        globalThis.fetch = previousFetch;
+        if (previousKey === undefined) delete process.env.OPS_THUMB_API_KEY;
+        else process.env.OPS_THUMB_API_KEY = previousKey;
+        if (previousUrl === undefined) delete process.env.SCRAPER_ORCHESTRATOR_THUMBS_PUBLISH_URL;
+        else process.env.SCRAPER_ORCHESTRATOR_THUMBS_PUBLISH_URL = previousUrl;
+      }
+    });
+  });
+
   it('hydrates missing lot images through the bounded owned-asset publisher', async () => {
     await withPublicAssetsRoot(async (root) => {
-      const relativePath = 'auction-lots/scraper-db/art/thumb/lot-1.jpg';
+      const relativePath = 'auction-lots/lot-1/thumb/0123456789abcdef.jpg';
       const absolutePath = path.join(root, relativePath);
       fs.mkdirSync(path.dirname(absolutePath), { recursive: true });
       fs.writeFileSync(absolutePath, 'image');
@@ -65,7 +134,11 @@ describe('ValuerService image contract', () => {
         thumbPublisher: async (lotUids) => {
           expect(lotUids).toEqual(['lot-1']);
           return new Map([
-            ['lot-1', { thumbUrl: 'https://auction.example.com/hotlink.jpg', srcPath: relativePath }],
+            ['lot-1', {
+              thumbUrl: `https://assets.appraisily.com/${relativePath}`,
+              srcPath: relativePath,
+              verifiedAt: '2026-08-01T00:00:00.000Z',
+            }],
           ]);
         },
       });
@@ -96,7 +169,11 @@ describe('ValuerService image contract', () => {
         thumbPublisher: async (lotUids) => {
           expect(lotUids).toEqual(['lot-1']);
           return new Map([
-            ['lot-1', { thumbUrl: null, srcPath: relativePath }],
+            ['lot-1', {
+              thumbUrl: `https://assets.appraisily.com/${relativePath}`,
+              srcPath: relativePath,
+              verifiedAt: '2026-08-01T00:00:00.000Z',
+            }],
           ]);
         },
       });
@@ -120,7 +197,11 @@ describe('ValuerService image contract', () => {
           close: async () => undefined,
         },
         thumbPublisher: async () => new Map([
-          ['lot-1', { thumbUrl: 'https://auction.example.com/hotlink.jpg', srcPath: null }],
+          ['lot-1', {
+            thumbUrl: 'https://assets.appraisily.com/auction-lots/lot-1/thumb/image.jpg',
+            srcPath: 'legacy-art/images/lot-1.jpg',
+            verifiedAt: '2026-08-01T00:00:00.000Z',
+          }],
         ]),
       });
 
