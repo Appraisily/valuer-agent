@@ -1,4 +1,8 @@
 import {
+  buildPublicAuctionImageUrl,
+  normalizeAssetsOrigin,
+  normalizePublicAuctionImagePath,
+  normalizePublicAuctionImageUrl,
   validateComparableLot,
   type CanonicalComparableLotV1,
 } from '@appraisily/auction-contracts';
@@ -109,11 +113,7 @@ function normalizeBaseUrl(value: string | undefined | null, fallback: string): s
 }
 
 export function isPublishedAssetPath(relativePath: NullableString): boolean {
-  const clean = String(relativePath || '').trim().replace(/^[\\/]+/, '').replace(/\\/g, '/');
-  const segments = clean.split('/').filter(Boolean);
-  return segments[0] === 'auction-lots'
-    && segments.length >= 3
-    && !segments.some((segment) => segment === '.' || segment === '..');
+  return normalizePublicAuctionImagePath(relativePath) !== null;
 }
 
 function currencyToSymbol(code: CurrencyCode): string {
@@ -176,20 +176,16 @@ export function deriveInvaluableLotUrl(opts: {
   return parts.join('-');
 }
 
-export function buildPublicAssetUrl(relativePath: string | null): string | null {
-  const clean = normalizePublicAssetPath(relativePath);
-  if (!clean) return null;
-  const base = normalizeBaseUrl(
-    process.env.PUBLIC_ASSETS_BASE_URL || process.env.LOCAL_STORAGE_BASE_URL_PUBLIC || process.env.LOCAL_STORAGE_BASE_URL,
-    'https://assets.appraisily.com',
+export function buildPublicAssetUrl(relativePath: string | null, assetsBaseUrl?: NullableString): string | null {
+  const base = normalizeAssetsOrigin(
+    assetsBaseUrl
+    || process.env.PUBLIC_ASSETS_BASE_URL
+    || process.env.LOCAL_STORAGE_BASE_URL_PUBLIC
+    || process.env.LOCAL_STORAGE_BASE_URL,
   );
-  const safe = clean
-    .split('/')
-    .filter(Boolean)
-    .map((segment) => encodeURIComponent(segment))
-    .join('/');
-
-  return `${base}/${safe}`;
+  const clean = normalizePublicAssetPath(relativePath, base);
+  if (!clean) return null;
+  return buildPublicAuctionImageUrl(clean, base);
 }
 
 export type LotImageAssetContract = {
@@ -203,33 +199,25 @@ export type LotImageAssetContract = {
   imageOriginalUrl: string | null;
 };
 
-function normalizePublicAssetPath(relativePath: NullableString): string | null {
+function normalizePublicAssetPath(relativePath: NullableString, assetsBaseUrl?: NullableString): string | null {
   const raw = String(relativePath || '').trim();
-  if (!raw || raw.startsWith('gs://')) return null;
+  if (!raw) return null;
   if (/^https?:\/\//i.test(raw)) {
-    try {
-      const url = new URL(raw);
-      const configuredBase = normalizeBaseUrl(
-        process.env.PUBLIC_ASSETS_BASE_URL || process.env.LOCAL_STORAGE_BASE_URL_PUBLIC || process.env.LOCAL_STORAGE_BASE_URL,
-        'https://assets.appraisily.com',
-      );
-      const configuredHost = new URL(configuredBase).host.toLowerCase();
-      const host = url.host.toLowerCase();
-      if (host !== 'assets.appraisily.com' && host !== configuredHost) return null;
-      return decodeURIComponent(url.pathname).replace(/^[\\/]+/, '').replace(/\\/g, '/');
-    } catch {
-      return null;
-    }
+    const origin = normalizeAssetsOrigin(
+      assetsBaseUrl
+      || process.env.PUBLIC_ASSETS_BASE_URL
+      || process.env.LOCAL_STORAGE_BASE_URL_PUBLIC
+      || process.env.LOCAL_STORAGE_BASE_URL,
+    );
+    const canonicalUrl = origin ? normalizePublicAuctionImageUrl(raw, origin) : null;
+    if (!canonicalUrl) return null;
+    return normalizePublicAuctionImagePath(decodeURIComponent(new URL(canonicalUrl).pathname.replace(/^\/+/, '')));
   }
-
-  let clean = raw.replace(/^[\\/]+/, '').replace(/\\/g, '/');
-  if (clean.startsWith('public/')) clean = clean.slice('public/'.length);
-  if (clean.startsWith('storage/public/')) clean = clean.slice('storage/public/'.length);
-  return clean.startsWith('auction-lots/') ? clean : null;
+  return normalizePublicAuctionImagePath(raw);
 }
 
-export function buildLotImageAssetContract(relativePath: NullableString): LotImageAssetContract {
-  const clean = normalizePublicAssetPath(relativePath);
+export function buildLotImageAssetContract(relativePath: NullableString, assetsBaseUrl?: NullableString): LotImageAssetContract {
+  const clean = normalizePublicAssetPath(relativePath, assetsBaseUrl);
   if (!clean || !isPublishedAssetPath(clean)) {
     return {
       imagePath: null,
@@ -243,32 +231,18 @@ export function buildLotImageAssetContract(relativePath: NullableString): LotIma
     };
   }
 
-  const variantMatch = clean.match(/^auction-lots\/[^/]+\/(thumb|medium|original)\//);
-  const currentVariant = variantMatch?.[1] || null;
-  const thumbPath = currentVariant === 'thumb'
-    ? clean
-    : clean;
-  const mediumPath = currentVariant === 'medium'
-    ? clean
-    : clean;
-  const originalPath = currentVariant === 'original'
-    ? clean
-    : clean;
-
-  const imagePath = originalPath || mediumPath || thumbPath || clean;
-  const thumbUrl = buildPublicAssetUrl(thumbPath || imagePath);
-  const imageUrl = buildPublicAssetUrl(mediumPath || thumbPath || imagePath);
-  const originalUrl = buildPublicAssetUrl(originalPath || imagePath);
+  const imagePath = clean;
+  const imageUrl = buildPublicAssetUrl(clean, assetsBaseUrl);
 
   return {
     imagePath,
-    thumbPath,
-    mediumPath,
-    originalPath,
-    thumbUrl,
+    thumbPath: clean,
+    mediumPath: clean,
+    originalPath: clean,
+    thumbUrl: imageUrl,
     imageUrl,
-    originalUrl,
-    imageOriginalUrl: originalUrl,
+    originalUrl: imageUrl,
+    imageOriginalUrl: imageUrl,
   };
 }
 
@@ -390,8 +364,17 @@ export class AuctionDataApiClient {
       const estimateMin = row.estimateMin !== null && row.estimateMin !== undefined ? Number(row.estimateMin) : null;
       const estimateMax = row.estimateMax !== null && row.estimateMax !== undefined ? Number(row.estimateMax) : null;
 
-      const assetStatus = ['available', 'unavailable'].includes(row.assetStatus) ? row.assetStatus : 'unknown';
-      const imageUrl = assetStatus === 'available' && typeof row.imageUrl === 'string' ? row.imageUrl : null;
+      const imageAssets = buildLotImageAssetContract(
+        typeof row.imageUrl === 'string' ? row.imageUrl : null,
+        this.assetsBaseUrl,
+      );
+      const verifiedAt = row.assetVerifiedAt && Number.isFinite(Date.parse(row.assetVerifiedAt))
+        ? new Date(row.assetVerifiedAt).toISOString()
+        : null;
+      const assetStatus = row.assetStatus === 'available' && imageAssets.imageUrl && verifiedAt
+        ? 'available'
+        : (row.assetStatus === 'unavailable' ? 'unavailable' : 'unknown');
+      const imageUrl = assetStatus === 'available' ? imageAssets.imageUrl : null;
       const sourceUrl = deriveInvaluableLotUrl({
         sourceUrl: row.sourceUrl || null,
         title: row.title || null,
@@ -414,11 +397,11 @@ export class AuctionDataApiClient {
         saleType: row.saleType || null,
         sourceUrl,
         rankingScore: row.rankingScore == null ? null : Number(row.rankingScore),
-        imagePath: imageUrl,
+        imagePath: assetStatus === 'available' ? imageAssets.imagePath : null,
         imageFileName: row.imageFileName || null,
         imageUrl,
         assetStatus,
-        assetVerifiedAt: row.assetVerifiedAt || null,
+        assetVerifiedAt: assetStatus === 'available' ? verifiedAt : null,
       };
       toCanonicalComparableLot(lot);
       return lot;
@@ -426,20 +409,6 @@ export class AuctionDataApiClient {
   }
 
   buildAssetUrl(path: string | null): string | null {
-    if (!path) return null;
-    const trimmed = String(path).trim();
-    if (!trimmed) return null;
-    if (/^https?:\/\//i.test(trimmed)) return trimmed;
-    if (trimmed.startsWith('gs://')) return null;
-    let clean = trimmed.replace(/^[\\/]+/, '').replace(/\\/g, '/');
-    if (clean.startsWith('public/')) clean = clean.slice('public/'.length);
-    if (clean.startsWith('storage/public/')) clean = clean.slice('storage/public/'.length);
-    if (!clean.startsWith('auction-lots/')) return null;
-    const safe = clean
-      .split('/')
-      .filter(Boolean)
-      .map((segment) => encodeURIComponent(segment))
-      .join('/');
-    return `${this.assetsBaseUrl}/${safe}`;
+    return buildPublicAssetUrl(path, this.assetsBaseUrl);
   }
 }

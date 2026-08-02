@@ -12,10 +12,9 @@
     "./fixtures/*": "./fixtures/*",
     "./release-manifest.schema.json": "./release-manifest.schema.json"
   },
-  "files": ["index.cjs", "index.js", "index.d.ts", "schemas", "fixtures", "release-manifest.schema.json", "README.md"],
+  "files": ["index.cjs", "index.js", "index.d.ts", "public-auction-image.cjs", "schemas", "fixtures", "release-manifest.schema.json", "README.md"],
   "scripts": { "test": "node --test test/*.test.cjs" },
   "engines": { "node": ">=18" },
   "license": "UNLICENSED",
   "private": true
 }
-

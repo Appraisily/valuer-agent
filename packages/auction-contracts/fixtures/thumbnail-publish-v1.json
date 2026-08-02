@@ -1,5 +1,4 @@
 {
-  "request": { "schemaVersion": 1, "requestId": "thumb-fixture-1", "correlationId": "correlation-fixture-1", "lotUids": ["fixture-lot-1"], "maxConcurrency": 1 },
-  "result": { "schemaVersion": 1, "requestId": "thumb-fixture-1", "requested": 1, "processed": 1, "publishedCount": 1, "skippedCount": 0, "failedCount": 0, "published": [{ "lotUid": "fixture-lot-1", "status": "ok" }] }
+  "request": { "schemaVersion": 1, "requestId": "thumb-fixture-1", "correlationId": "correlation-fixture-1", "lotUids": ["fixture-lot-1"], "limit": 1, "maxConcurrency": 1 },
+  "result": { "schemaVersion": 1, "requestId": "thumb-fixture-1", "correlationId": "correlation-fixture-1", "success": true, "requested": 1, "processed": 1, "publishedCount": 1, "skippedCount": 0, "failedCount": 0, "published": [{ "lotUid": "fixture-lot-1", "status": "ok", "srcPath": "auction-lots/fixture-lot-1/thumb/0123456789abcdef.jpg", "thumbUrl": "https://assets.appraisily.com/auction-lots/fixture-lot-1/thumb/0123456789abcdef.jpg", "verifiedAt": "2026-08-01T00:00:00.000Z" }], "skipped": [], "failed": [] }
 }
-

@@ -3,8 +3,76 @@
   "$id": "https://appraisily.com/schemas/thumbnail-publish-v1.json",
   "title": "Thumbnail publish request and result v1",
   "$defs": {
-    "request": { "type": "object", "required": ["schemaVersion", "requestId", "correlationId", "lotUids"], "properties": { "schemaVersion": { "const": 1 }, "requestId": { "type": "string", "minLength": 1 }, "correlationId": { "type": "string", "minLength": 1 }, "lotUids": { "type": "array", "minItems": 1, "maxItems": 100, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } }, "maxConcurrency": { "type": "integer", "minimum": 1, "maximum": 4 } }, "additionalProperties": false },
-    "result": { "type": "object", "required": ["schemaVersion", "requestId", "requested", "processed", "publishedCount", "skippedCount", "failedCount"], "properties": { "schemaVersion": { "const": 1 }, "requestId": { "type": "string", "minLength": 1 }, "requested": { "type": "integer", "minimum": 0 }, "processed": { "type": "integer", "minimum": 0 }, "publishedCount": { "type": "integer", "minimum": 0 }, "skippedCount": { "type": "integer", "minimum": 0 }, "failedCount": { "type": "integer", "minimum": 0 } }, "additionalProperties": true }
-  }
+    "request": {
+      "type": "object",
+      "required": ["schemaVersion", "requestId", "correlationId", "lotUids"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "requestId": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "correlationId": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "lotUids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 100,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$" }
+        },
+        "limit": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "maxConcurrency": { "type": "integer", "minimum": 1, "maximum": 4 }
+      },
+      "additionalProperties": false
+    },
+    "published": {
+      "type": "object",
+      "required": ["lotUid", "status", "srcPath", "thumbUrl", "verifiedAt"],
+      "properties": {
+        "lotUid": { "type": "string", "minLength": 1 },
+        "status": { "const": "ok" },
+        "srcPath": { "type": "string", "pattern": "^auction-lots/[A-Za-z0-9][A-Za-z0-9._-]{0,254}/thumb/[A-Za-z0-9][A-Za-z0-9._-]{0,254}\\.(?:avif|jpe?g|png|webp)$" },
+        "thumbUrl": { "type": "string", "pattern": "^https://assets\\.appraisily\\.com/auction-lots/" },
+        "verifiedAt": { "type": "string", "format": "date-time" },
+        "width": { "type": "integer", "minimum": 1 },
+        "height": { "type": "integer", "minimum": 1 },
+        "contentType": { "enum": ["image/jpeg", "image/webp", "image/png", "image/avif"] },
+        "sizeBytes": { "type": "integer", "minimum": 1 },
+        "hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "ordinal": { "type": ["integer", "null"], "minimum": 0 },
+        "reused": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "failure": {
+      "type": "object",
+      "required": ["lotUid", "status", "reason"],
+      "properties": {
+        "lotUid": { "type": "string", "minLength": 1 },
+        "status": { "enum": ["skipped", "failed"] },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 500 }
+      },
+      "additionalProperties": false
+    },
+    "result": {
+      "type": "object",
+      "required": ["schemaVersion", "requestId", "correlationId", "success", "requested", "processed", "publishedCount", "skippedCount", "failedCount", "published", "skipped", "failed"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "requestId": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "correlationId": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "success": { "const": true },
+        "requested": { "type": "integer", "minimum": 0 },
+        "processed": { "type": "integer", "minimum": 0 },
+        "publishedCount": { "type": "integer", "minimum": 0 },
+        "skippedCount": { "type": "integer", "minimum": 0 },
+        "failedCount": { "type": "integer", "minimum": 0 },
+        "published": { "type": "array", "items": { "$ref": "#/$defs/published" } },
+        "skipped": { "type": "array", "items": { "$ref": "#/$defs/failure" } },
+        "failed": { "type": "array", "items": { "$ref": "#/$defs/failure" } }
+      },
+      "additionalProperties": false
+    }
+  },
+  "oneOf": [
+    { "$ref": "#/$defs/request" },
+    { "$ref": "#/$defs/result" }
+  ]
 }
-
