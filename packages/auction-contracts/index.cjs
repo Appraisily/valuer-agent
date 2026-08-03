@@ -189,14 +189,16 @@ function validateThumbnailPublishResult(input) {
   const outcomeLotUids = new Set();
   for (const [index, outcome] of input.published.entries()) {
     object(outcome, contract, `published[${index}]`);
-    onlyFields(outcome, ['lotUid', 'status', 'srcPath', 'thumbUrl', 'verifiedAt', 'width', 'height', 'contentType', 'sizeBytes', 'hash', 'ordinal', 'reused'], contract, `published[${index}]`);
+    onlyFields(outcome, ['lotUid', 'status', 'srcPath', 'previousSrcPath', 'imageUrl', 'thumbUrl', 'verifiedAt', 'width', 'height', 'contentType', 'sizeBytes', 'hash', 'ordinal', 'reused'], contract, `published[${index}]`);
     if (typeof outcome.lotUid !== 'string' || !publicAuctionImage.normalizePublicAuctionLotUid(outcome.lotUid)) throw new AuctionContractError(contract, `published[${index}].lotUid must be storage-safe`);
     if (outcomeLotUids.has(outcome.lotUid)) throw new AuctionContractError(contract, `duplicate outcome for lotUid ${outcome.lotUid}`);
     outcomeLotUids.add(outcome.lotUid);
     if (outcome.status !== 'ok') throw new AuctionContractError(contract, `published[${index}].status must be ok`);
     const srcPath = publicAuctionImage.normalizePublicAuctionImagePath(outcome.srcPath);
     if (!srcPath || srcPath.split('/')[1] !== outcome.lotUid) throw new AuctionContractError(contract, `published[${index}].srcPath must match lotUid`);
+    if (outcome.previousSrcPath != null) string(outcome.previousSrcPath, contract, `published[${index}].previousSrcPath`, { max: 2048 });
     const expectedUrl = publicAuctionImage.buildPublicAuctionImageUrl(srcPath);
+    if (outcome.imageUrl !== expectedUrl) throw new AuctionContractError(contract, `published[${index}].imageUrl must exactly match srcPath`);
     if (outcome.thumbUrl !== expectedUrl) throw new AuctionContractError(contract, `published[${index}].thumbUrl must exactly match srcPath`);
     isoTimestamp(outcome.verifiedAt, contract, `published[${index}].verifiedAt`);
     for (const field of ['width', 'height', 'sizeBytes']) {

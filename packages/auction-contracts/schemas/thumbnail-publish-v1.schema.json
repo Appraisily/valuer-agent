@@ -24,11 +24,13 @@
     },
     "published": {
       "type": "object",
-      "required": ["lotUid", "status", "srcPath", "thumbUrl", "verifiedAt"],
+      "required": ["lotUid", "status", "srcPath", "imageUrl", "thumbUrl", "verifiedAt"],
       "properties": {
         "lotUid": { "type": "string", "minLength": 1 },
         "status": { "const": "ok" },
         "srcPath": { "type": "string", "pattern": "^auction-lots/[A-Za-z0-9][A-Za-z0-9._-]{0,254}/thumb/[A-Za-z0-9][A-Za-z0-9._-]{0,254}\\.(?:avif|jpe?g|png|webp)$" },
+        "previousSrcPath": { "type": ["string", "null"], "minLength": 1, "maxLength": 2048 },
+        "imageUrl": { "type": "string", "pattern": "^https://assets\\.appraisily\\.com/auction-lots/" },
         "thumbUrl": { "type": "string", "pattern": "^https://assets\\.appraisily\\.com/auction-lots/" },
         "verifiedAt": { "type": "string", "format": "date-time" },
         "width": { "type": "integer", "minimum": 1 },

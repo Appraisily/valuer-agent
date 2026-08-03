@@ -87,6 +87,7 @@ describe('ValuerService image contract', () => {
             lotUid: 'lot-1',
             status: 'ok',
             srcPath: relativePath,
+            imageUrl: `https://assets.appraisily.com/${relativePath}`,
             thumbUrl: `https://assets.appraisily.com/${relativePath}`,
             verifiedAt: '2026-08-01T00:00:00.000Z',
           }],
@@ -104,7 +105,7 @@ describe('ValuerService image contract', () => {
         });
         const result = await service.batchSearch({ searches: [{ query: 'test lot', limit: 1 }] });
         const lot = result.searches[0].result.data.lots[0];
-        expect(lot.imageUrl).toBe(`https://assets.example.test/${relativePath}`);
+        expect(lot.imageUrl).toBe(`https://assets.appraisily.com/${relativePath}`);
         expect(lot.assetStatus).toBe('available');
         expect(lot.assetVerifiedAt).toBe('2026-08-01T00:00:00.000Z');
       } finally {
@@ -135,7 +136,8 @@ describe('ValuerService image contract', () => {
           expect(lotUids).toEqual(['lot-1']);
           return new Map([
             ['lot-1', {
-              thumbUrl: `https://assets.appraisily.com/${relativePath}`,
+              imageUrl: `https://assets.appraisily.com/${relativePath}`,
+              thumbUrl: 'https://auction.example/legacy-thumbnail.jpg',
               srcPath: relativePath,
               verifiedAt: '2026-08-01T00:00:00.000Z',
             }],
@@ -146,7 +148,7 @@ describe('ValuerService image contract', () => {
       const result = await service.batchSearch({ searches: [{ query: 'test lot', limit: 1 }] });
       const lot = result.searches[0].result.data.lots[0];
 
-      expect(lot.imageUrl).toBe(`https://assets.example.test/${relativePath}`);
+      expect(lot.imageUrl).toBe(`https://assets.appraisily.com/${relativePath}`);
       expect(lot.assetStatus).toBe('available');
       expect(lot.assetVerifiedAt).toBeTruthy();
     });
@@ -170,6 +172,7 @@ describe('ValuerService image contract', () => {
           expect(lotUids).toEqual(['lot-1']);
           return new Map([
             ['lot-1', {
+              imageUrl: `https://assets.appraisily.com/${relativePath}`,
               thumbUrl: `https://assets.appraisily.com/${relativePath}`,
               srcPath: relativePath,
               verifiedAt: '2026-08-01T00:00:00.000Z',
@@ -181,7 +184,7 @@ describe('ValuerService image contract', () => {
       const result = await service.batchSearch({ searches: [{ query: 'test lot', limit: 1 }] });
       const lot = result.searches[0].result.data.lots[0];
 
-      expect(lot.imageUrl).toBe(`https://assets.example.test/${relativePath}`);
+      expect(lot.imageUrl).toBe(`https://assets.appraisily.com/${relativePath}`);
       expect(lot.assetStatus).toBe('available');
       expect(lot.assetVerifiedAt).toBeTruthy();
     });
@@ -198,6 +201,7 @@ describe('ValuerService image contract', () => {
         },
         thumbPublisher: async () => new Map([
           ['lot-1', {
+            imageUrl: 'https://assets.appraisily.com/auction-lots/lot-1/thumb/image.jpg',
             thumbUrl: 'https://assets.appraisily.com/auction-lots/lot-1/thumb/image.jpg',
             srcPath: 'legacy-art/images/lot-1.jpg',
             verifiedAt: '2026-08-01T00:00:00.000Z',

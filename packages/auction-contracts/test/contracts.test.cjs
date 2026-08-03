@@ -46,3 +46,21 @@ test('ingest references reject traversal', () => {
   command.artifact.path = '../customer-data';
   assert.throws(() => contracts.validateIngestCommand(command), /storage-relative path/);
 });
+
+test('thumbnail publication requires primary imageUrl and matching compatibility alias', () => {
+  const thumb = read('thumbnail-publish-v1.json');
+  assert.throws(
+    () => contracts.validateThumbnailPublishResult({
+      ...thumb.result,
+      published: [{ ...thumb.result.published[0], imageUrl: undefined }],
+    }),
+    /imageUrl must exactly match srcPath/
+  );
+  assert.throws(
+    () => contracts.validateThumbnailPublishResult({
+      ...thumb.result,
+      published: [{ ...thumb.result.published[0], thumbUrl: 'https://assets.appraisily.com/auction-lots/fixture-lot-1/thumb/other.jpg' }],
+    }),
+    /thumbUrl must exactly match srcPath/
+  );
+});

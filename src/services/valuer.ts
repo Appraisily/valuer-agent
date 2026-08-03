@@ -54,7 +54,7 @@ type BatchSearchBody = {
 };
 
 type AuctionDataApiReader = Pick<AuctionDataApiClient, 'searchLots' | 'close'> & Partial<Pick<AuctionDataApiClient, 'checkReadiness'>>;
-type ThumbPublishResult = Map<string, { thumbUrl: string; srcPath: string; verifiedAt: string }>;
+type ThumbPublishResult = Map<string, { imageUrl: string; thumbUrl: string; srcPath: string; verifiedAt: string }>;
 
 export class ValuerService {
   private auctionDataApi: AuctionDataApiReader;
@@ -166,6 +166,7 @@ export class ValuerService {
         const lotUid = String(item?.lotUid || '').trim();
         if (!lotUid) continue;
         out.set(lotUid, {
+          imageUrl: String(item.imageUrl),
           thumbUrl: String(item.thumbUrl),
           srcPath: String(item.srcPath),
           verifiedAt: new Date(item.verifiedAt).toISOString(),
@@ -355,9 +356,16 @@ export class ValuerService {
         if (!lotUid) continue;
         const published = publishedThumbs.get(lotUid);
         if (!published) continue;
-        const imageAssets = buildLotImageAssetContract(published.srcPath);
-        if (!imageAssets.thumbUrl && !imageAssets.imageUrl) continue;
-        lot.imageUrl = imageAssets.imageUrl || imageAssets.thumbUrl;
+        const imageAssets = buildLotImageAssetContract(
+          published.imageUrl,
+          'https://assets.appraisily.com',
+        );
+        const pathAssets = buildLotImageAssetContract(
+          published.srcPath,
+          'https://assets.appraisily.com',
+        );
+        if (!imageAssets.imageUrl || imageAssets.imageUrl !== pathAssets.imageUrl) continue;
+        lot.imageUrl = imageAssets.imageUrl;
         lot.assetStatus = lot.imageUrl ? 'available' : lot.assetStatus;
         if (lot.imageUrl) lot.assetVerifiedAt = published.verifiedAt;
       }
