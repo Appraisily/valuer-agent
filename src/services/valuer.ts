@@ -9,6 +9,7 @@ import { AuctionDataApiClient, AuctionDataApiError, buildLotImageAssetContract }
 import { recordBatchOutcome } from './metrics.js';
 
 const warnedLegacyValuerSettings = new Set<string>();
+const THUMB_PUBLISH_DEADLINE_RESERVE_MS = 2_000;
 
 export function resolveValuerEnvSetting(
   canonicalName: string,
@@ -91,8 +92,35 @@ export class ValuerService {
     return this.batchSearchAuctionDataApi(body, options);
   }
 
-  private async publishLotThumbs(lotUids: string[]): Promise<ThumbPublishResult> {
-    if (this.thumbPublisher) return this.thumbPublisher(lotUids);
+  private async publishLotThumbs(lotUids: string[], timeoutBudgetMs?: number): Promise<ThumbPublishResult> {
+    const configuredTimeoutMs = (() => {
+      const env = Number(process.env.SCRAPPER_THUMBS_PUBLISH_TIMEOUT_MS);
+      return Number.isFinite(env) && env > 0 ? Math.floor(env) : 60_000;
+    })();
+    const requestedTimeoutMs = Number(timeoutBudgetMs);
+    const timeoutMs = Math.max(100, Math.min(
+      configuredTimeoutMs,
+      Number.isFinite(requestedTimeoutMs) && requestedTimeoutMs > 0
+        ? Math.floor(requestedTimeoutMs)
+        : configuredTimeoutMs,
+    ));
+
+    if (this.thumbPublisher) {
+      let timeout: NodeJS.Timeout | undefined;
+      try {
+        return await Promise.race([
+          this.thumbPublisher(lotUids),
+          new Promise<ThumbPublishResult>((_resolve, reject) => {
+            timeout = setTimeout(() => reject(new Error('thumb_publish_timeout')), timeoutMs);
+          }),
+        ]);
+      } catch (err: any) {
+        console.warn(`[valuer-bridge] Thumb publish request error: ${err?.message || err}`);
+        return new Map();
+      } finally {
+        if (timeout) clearTimeout(timeout);
+      }
+    }
 
     const publishUrl = String(
       process.env.SCRAPER_ORCHESTRATOR_THUMBS_PUBLISH_URL ||
@@ -120,10 +148,6 @@ export class ValuerService {
     if (!unique.length) return new Map();
 
     const controller = new AbortController();
-    const timeoutMs = (() => {
-      const env = Number(process.env.SCRAPPER_THUMBS_PUBLISH_TIMEOUT_MS);
-      return Number.isFinite(env) && env > 0 ? Math.floor(env) : 60_000;
-    })();
     const id = setTimeout(() => controller.abort(new Error('thumb_publish_timeout')), timeoutMs);
 
     try {
@@ -314,14 +338,18 @@ export class ValuerService {
     const results = await runLimited(tasks, concurrency);
     const publishedThumbs: ThumbPublishResult = new Map();
 
-    if (!skipThumbPublish && deadlineAt - Date.now() > 1_000) {
+    const remainingMs = deadlineAt - Date.now();
+    if (!skipThumbPublish && remainingMs > THUMB_PUBLISH_DEADLINE_RESERVE_MS + 100) {
       const missingAll: string[] = [];
       for (const settled of results) {
         if (settled?.status !== 'fulfilled') continue;
         const uids = Array.isArray(settled.value?.missingLotUids) ? settled.value.missingLotUids : [];
         for (const uid of uids) missingAll.push(uid);
       }
-      const published = await this.publishLotThumbs(missingAll);
+      const published = await this.publishLotThumbs(
+        missingAll,
+        remainingMs - THUMB_PUBLISH_DEADLINE_RESERVE_MS,
+      );
       for (const [key, value] of published.entries()) publishedThumbs.set(key, value);
     }
 

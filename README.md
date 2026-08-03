@@ -77,6 +77,7 @@ Important behavior:
 - A transport circuit breaker stops repeated attempts while the Auction Data API is unhealthy.
 - `data.lots` and every `data.byQuery[].result.data.lots[]` entry use the canonical auction lot fields: `schemaVersion`, `lotUid`, `lotRef`, `title`, `description`, `houseName`, `saleType`, `auctionDate`, `priceRealised`, `currency`, `estimateMin`, `estimateMax`, `lotNumber`, `sourceUrl`, `rankingScore`, `assetStatus`, `assetVerifiedAt`, and `imageUrl`.
 - `imageUrl` is non-null only when the upstream contract says `assetStatus=available` and includes a verification timestamp.
+- Owned-image publication uses only the remaining batch budget and reserves time to return comparable rows. If publication times out, the response omits those unverified images instead of delaying or failing the search.
 
 ## Removed Endpoints
 

@@ -48,6 +48,28 @@ function withPublicAssetsRoot<T>(fn: (root: string) => Promise<T>): Promise<T> {
 }
 
 describe('ValuerService image contract', () => {
+  it('keeps thumbnail publication inside the batch deadline', async () => {
+    await withPublicAssetsRoot(async () => {
+      const service = new ValuerService({
+        auctionDataApi: {
+          searchLots: async (_params: AuctionDataApiSearchParams) => [baseLot()],
+          close: async () => undefined,
+        },
+        thumbPublisher: async () => new Promise<never>(() => {}),
+      });
+
+      const startedAt = Date.now();
+      const result = await service.batchSearch(
+        { searches: [{ query: 'test lot', limit: 1 }] },
+        { timeoutMs: 2_600 },
+      );
+
+      expect(Date.now() - startedAt).toBeLessThan(2_000);
+      expect(result.batch).toMatchObject({ completed: 1, failed: 0 });
+      expect(result.searches[0].result.data.lots[0].imageUrl).toBeNull();
+    });
+  });
+
   it('sends and validates the strict thumbnail publish request identity', async () => {
     await withPublicAssetsRoot(async (root) => {
       const relativePath = 'auction-lots/lot-1/thumb/0123456789abcdef.jpg';
