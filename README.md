@@ -1,10 +1,21 @@
-# Valuer Bridge
+# Standalone Valuer Bridge (Rollback Only)
 
-Valuer Bridge is the bounded comparable-auction search service for Appraisily.
+This repository is the stopped pre-consolidation Valuer implementation. It is
+not Appraisily's current read service and must not be deployed as a normal
+production component.
 
-It is intentionally not an agent. It does not generate search terms, call OpenAI, scrape live sites, or fall back to alternate providers at runtime. Callers send explicit search terms. Valuer Bridge calls the authenticated Auction Data API owned by Scraper Orchestrator; it does not connect to scraper PostgreSQL directly.
+Auction Data Service is the canonical read product. It runs as `data-api` from
+the compatibility-named `scraper-orchestrator` repository/container and serves
+the retained `valuer-bridge` hostname, Docker alias, loopback port `8113`, and
+`/v2/search/batch` contract. This standalone source, image, and Compose overlay
+exist only for an explicitly authorized rollback or retirement action.
 
-## Runtime Contract
+The rollback implementation is intentionally not an agent. It does not generate
+search terms, call OpenAI, scrape live sites, or connect to scraper PostgreSQL
+directly. The sections below document its historical rollback contract; they do
+not describe the active production topology.
+
+## Rollback Runtime Contract
 
 ### `GET /live`
 
@@ -30,7 +41,7 @@ Compatibility health surface. It reports the configured provider and points call
 
 ### `POST /v2/search/batch`
 
-Canonical search endpoint. It accepts caller-owned term tiers and returns per-query lots plus a deduped compact lot list.
+Rollback-compatible search endpoint. It accepts caller-owned term tiers and returns per-query lots plus a deduped compact lot list.
 
 ```json
 {
@@ -128,7 +139,7 @@ Temporary environment aliases retained for one compatibility release:
 
 Canonical settings take precedence when both names are present. A legacy-only setting emits a deprecation warning and remains functional until the dated removal follow-up after the first compatibility release.
 
-## Checks
+## Rollback Source Checks
 
 ```bash
 npm run test
@@ -137,13 +148,17 @@ npm run build
 VALUER_BRIDGE_BASE_URL=http://127.0.0.1:8113 npm run smoke
 ```
 
-Deploy smoke:
+Rollback deploy smoke:
 
 ```bash
 npm run smoke:deploy -- --base https://valuer-bridge.appraisily.com --container valuer-bridge
 ```
 
-The deploy smoke is wired into the VPS deploy helper. Candidate deploys run the HTTP contract against the temporary container before promotion. Live deploys additionally assert the container runtime env has `AUCTION_DATA_API_URL` and `AUCTION_DATA_API_KEY`, does not have legacy AI/fallback provider env names, and has no recent blocking log errors.
+The deploy helper retains this smoke only for an explicitly authorized rollback.
+Candidate rollback deploys run the HTTP contract against the temporary container
+before promotion. Live rollback deploys additionally assert the container runtime
+env has `AUCTION_DATA_API_URL` and `AUCTION_DATA_API_KEY`, does not have legacy
+AI/fallback provider env names, and has no recent blocking log errors.
 
 For runtime env schema validation:
 
