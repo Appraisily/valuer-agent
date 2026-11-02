@@ -1,8 +1,6 @@
 **
-!services/
 !services/valuer-bridge/
 !services/valuer-bridge/**
-!shared/
 !shared/messaging/
 !shared/messaging/**
 **/node_modules
