@@ -165,3 +165,13 @@ For runtime env schema validation:
 ```bash
 ENV_GOV_ENV_FILE=/srv/infrastructure/vps-infra/compose/appraisily/runtime/docker-compose/valuer-bridge/runtime.env npm run env:check
 ```
+
+## Shared messaging dependency
+
+`@appraisily/messaging` comes only from `/srv/repos/shared/messaging` through
+`file:../../shared/messaging`. `.npmrc` enables packed local installs, so the
+installed package is not a runtime symlink to another checkout. Run
+`npm ci --install-links` and `node /srv/repos/shared/messaging/scripts/check-drift.mjs`
+when changing dependency wiring.
+The Docker context is `/srv/repos`; `Dockerfile.dockerignore` limits its inputs
+to this service and the shared messaging source.

@@ -2,11 +2,12 @@ FROM node:20-slim AS builder
 
 WORKDIR /usr/src/app
 
-COPY package*.json ./
-COPY packages ./packages
+COPY services/valuer-bridge/package*.json services/valuer-bridge/.npmrc ./
+COPY services/valuer-bridge/packages ./packages
+COPY shared/messaging /usr/shared/messaging
 RUN npm ci --install-links
 
-COPY . ./
+COPY services/valuer-bridge/. ./
 RUN node -e "const fs=require('fs');const lines=fs.readFileSync('env.schema','utf8').split(/\r?\n/).map(l=>l.trim()).filter(l=>l&&!l.startsWith('#')).map(l=>l.split(/[\s#]/)[0]).filter(Boolean).map(k=>k+'=build');fs.writeFileSync('/tmp/build.env',lines.join('\n')+'\n')"
 RUN PORT=8080 AUCTION_DATA_API_URL=http://auction-data.invalid AUCTION_DATA_API_KEY=build npm run build
 

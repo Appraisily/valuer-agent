@@ -19,7 +19,7 @@
   },
   "dependencies": {
     "@appraisily/auction-contracts": "file:./packages/auction-contracts",
-    "@appraisily/messaging": "file:./packages/messaging",
+    "@appraisily/messaging": "file:../../shared/messaging",
     "amqplib": "^0.10.9",
     "express": "^4.22.2",
     "prom-client": "^15.1.3",

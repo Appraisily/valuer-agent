@@ -1,0 +1,16 @@
+**
+!services/
+!services/valuer-bridge/
+!services/valuer-bridge/**
+!shared/
+!shared/messaging/
+!shared/messaging/**
+**/node_modules
+**/.git
+**/.env
+**/.env.*
+!services/valuer-bridge/.env.names
+**/logs
+**/*.log
+**/coverage
+**/.vscode
